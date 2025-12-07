@@ -1,0 +1,16 @@
+rules:
+  - field: message
+    contains: "password"
+    message: "Secret exposé dans les logs"
+
+  - field: message
+    contains: "token"
+    message: "Token trouvé dans les logs"
+
+  - field: status
+    contains: "failed"
+    message: "Pipeline en échec"
+
+  - field: pipeline
+    contains: "deploy"
+    message: "Pipeline deploy doit être pinné (règle SLSA)"

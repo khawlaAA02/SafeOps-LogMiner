@@ -1,0 +1,9 @@
+fixes:
+  - trigger: "Secret exposé dans les logs"
+    suggestion: "Ne jamais écrire un mot de passe en clair. Utiliser un secret chiffré."
+
+  - trigger: "Pipeline en échec"
+    suggestion: "Analyser le job échoué. Ajouter des tests et des validations."
+
+  - trigger: "Pipeline non pinné"
+    suggestion: "Utiliser un pin de version (ex: @v3) pour éviter les attaques d'injection."

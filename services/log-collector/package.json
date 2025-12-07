@@ -1,0 +1,14 @@
+{
+  "name": "log-collector",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "mongoose": "^9.0.1",
+    "dotenv": "^17.2.0"
+  }
+}
