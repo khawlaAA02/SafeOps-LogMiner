@@ -29,3 +29,7 @@ Thumbs.db
 dist/
 build/
 coverage/
+
+# MongoDB data
+data/mongo/
+data/**/mongo/
