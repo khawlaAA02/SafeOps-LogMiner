@@ -1,0 +1,184 @@
+services:
+  # -------------------------
+  # DB Mongo (MS1/MS2)
+  # -------------------------
+  mongo:
+    image: mongo:7
+    container_name: safeops-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "mongodb://localhost:27017/admin", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -------------------------
+  # PostgreSQL / TimescaleDB
+  # -------------------------
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: safeops-postgres
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=timescaledb
+    environment:
+      POSTGRES_DB: safeops_security
+      POSTGRES_USER: safeops
+      POSTGRES_PASSWORD: safeops
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safeops -d safeops_security"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -------------------------
+  # Migrator (migrations SQL) - se lance puis EXIT OK
+  # -------------------------
+  migrator:
+    image: postgres:15
+    container_name: safeops-migrator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/migrations:ro
+    environment:
+      PGPASSWORD: safeops
+    entrypoint: ["/bin/sh", "-c"]
+    # ⚠️ NOTE: $$f (et pas $f) pour éviter que docker-compose remplace la variable
+    command: >
+      echo "✅ Migrator started";
+      echo "📁 Listing /migrations:";
+      ls -la /migrations;
+      for f in /migrations/*.sql; do
+        echo "➡️ Running migration: $$f";
+        psql -h postgres -U safeops -d safeops_security -f "$$f" || exit 3;
+      done;
+      echo "✅ Migrations OK";
+
+  # -------------------------
+  # LogCollector (MS1)
+  # -------------------------
+  log-collector:
+    build: ./services/log-collector
+    container_name: safeops-log-collector
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./services/log-collector/.env
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -------------------------
+  # LogParser (MS2)
+  # -------------------------
+  log-parser:
+    build: ./services/log-parser
+    container_name: safeops-log-parser
+    ports:
+      - "3002:3002"
+    env_file:
+      - ./services/log-parser/.env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      log-collector:
+        condition: service_healthy
+
+  # -------------------------
+  # VulnDetector (MS3)
+  # -------------------------
+  vuln-detector:
+    build: ./services/vuln-detector
+    container_name: safeops-vuln-detector
+    ports:
+      - "3003:3003"
+    env_file:
+      - ./services/vuln-detector/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      log-parser:
+        condition: service_started
+
+  # -------------------------
+  # FixSuggester (MS4)  ✅ (ton service 3004)
+  # -------------------------
+  fix-suggester:
+    build: ./services/fix-suggester
+    container_name: safeops-fix-suggester
+    ports:
+      - "3004:3004"
+    env_file:
+      - ./services/fix-suggester/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vuln-detector:
+        condition: service_started
+
+  # -------------------------
+  # AnomalyDetector (MS5)
+  # -------------------------
+  anomaly-detector:
+    build: ./services/anomaly-detector
+    container_name: safeops-anomaly-detector
+    ports:
+      - "3005:3005"
+    env_file:
+      - ./services/anomaly-detector/.env
+    environment:
+      - TF_CPP_MIN_LOG_LEVEL=2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vuln-detector:
+        condition: service_started
+
+  # -------------------------
+  # ReportGenerator (MS6)
+  # -------------------------
+  report-generator:
+    build: ./services/report-generator
+    container_name: safeops-report-generator
+    ports:
+      - "3006:3006"
+    env_file:
+      - ./services/report-generator/.env
+    volumes:
+      - ./reports:/app/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # -------------------------
+  # Dashboard API (MS7)
+  # -------------------------
+  dashboard-api:
+    build: ./services/dashboard-api
+    container_name: safeops-dashboard-api
+    ports:
+      - "3010:3010"
+    env_file:
+      - ./services/dashboard-api/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
+  pg_data:

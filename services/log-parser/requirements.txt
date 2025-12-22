@@ -1,6 +1,7 @@
-fastapi
-uvicorn
-pymongo
-python-dotenv
-pyyaml
-jsonpath-ng
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+pymongo==4.10.1
+jsonpath-ng==1.6.1
+PyYAML==6.0.2
+dnspython==2.7.0

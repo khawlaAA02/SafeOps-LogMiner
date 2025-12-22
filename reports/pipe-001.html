@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SafeOps Report - pipe-001</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+    .sev-critical { color: #b00020; font-weight: 700; }
+    .sev-high { color: #c25a00; font-weight: 700; }
+    .sev-medium { color: #8a6d00; font-weight: 700; }
+    .sev-low { color: #2a6b2a; font-weight: 700; }
+    code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>SafeOps-LogMiner — Security Report</h1>
+  <div class="card">
+    <div><b>Pipeline:</b> pipe-001</div>
+    <div><b>Date:</b> 2025-12-21T14:55:36.034Z</div>
+    <div><b>Security score:</b> 72/100</div>
+    <div><b>Findings:</b> 2 | <b>Anomalies:</b> 0</div>
+  </div>
+
+  <h2>Vulnerabilities</h2>
+      <div class="card">
+        <div><b>Report #1</b> — status: failed — Fri Dec 19 2025 08:01:31 GMT+0000 (Coordinated Universal Time)</div>
+          <ul>
+              <li>
+                <span class="sev-critical">[critical]</span>
+                <b>Exposed secret in logs</b> — A token/secret was detected in pipeline output.<br/>
+                <i>Recommendation:</i> Remove secrets from logs, use secret masking and vault.
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Pipeline contains error keywords</b> — Error-like keywords detected (failed/exception).<br/>
+                <i>Recommendation:</i> Inspect failing step and ensure security checks are not skipped.
+              </li>
+          </ul>
+      </div>
+
+  <h2>Fix suggestions (latest)</h2>
+    <ul>
+        <li><b>F002</b> — Prevent bypass flags and enforce protections — Sun Dec 21 2025 12:51:25 GMT+0000 (Coordinated Universal Time)</li>
+        <li><b>F001</b> — Stop leaking secrets + use secrets store — Sun Dec 21 2025 12:51:25 GMT+0000 (Coordinated Universal Time)</li>
+        <li><b>F001</b> — Mask secrets and use encrypted secrets — Sun Dec 21 2025 12:40:24 GMT+0000 (Coordinated Universal Time)</li>
+        <li><b>F001</b> — Mask secrets and use encrypted secrets — Fri Dec 19 2025 08:17:02 GMT+0000 (Coordinated Universal Time)</li>
+    </ul>
+
+  <h2>Anomalies</h2>
+  <p>Anomalies detected: <b>0</b></p>
+</body>
+</html>

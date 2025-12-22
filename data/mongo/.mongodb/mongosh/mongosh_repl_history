@@ -1,1 +1,0 @@
-  -d "{ \"pipeline\": \"build\", \"status\": \"success\", \"message\": \"Build ok - https://example.com\", \"raw\": { \"pipeline\": {\"name\": \"deploy\"}, \"steps\": [{\"name\": \"init\"},{\"name\": \"deploy\"}]

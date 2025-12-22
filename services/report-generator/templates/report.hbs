@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SafeOps Report - {{pipeline}}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+    .sev-critical { color: #b00020; font-weight: 700; }
+    .sev-high { color: #c25a00; font-weight: 700; }
+    .sev-medium { color: #8a6d00; font-weight: 700; }
+    .sev-low { color: #2a6b2a; font-weight: 700; }
+    code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>SafeOps-LogMiner — Security Report</h1>
+  <div class="card">
+    <div><b>Pipeline:</b> {{pipeline}}</div>
+    <div><b>Date:</b> {{date}}</div>
+    <div><b>Security score:</b> {{score}}/100</div>
+    <div><b>Findings:</b> {{stats.totalFindings}} | <b>Anomalies:</b> {{anomalies}}</div>
+  </div>
+
+  <h2>Vulnerabilities</h2>
+  {{#if vulns.length}}
+    {{#each vulns}}
+      <div class="card">
+        <div><b>Report #{{id}}</b> — status: {{status}} — {{created_at}}</div>
+        {{#if findings.length}}
+          <ul>
+            {{#each findings}}
+              <li>
+                <span class="sev-{{severity}}">[{{severity}}]</span>
+                <b>{{title}}</b> — {{description}}<br/>
+                <i>Recommendation:</i> {{recommendation}}
+              </li>
+            {{/each}}
+          </ul>
+        {{else}}
+          <i>No findings.</i>
+        {{/if}}
+      </div>
+    {{/each}}
+  {{else}}
+    <p>No vulnerability reports found.</p>
+  {{/if}}
+
+  <h2>Fix suggestions (latest)</h2>
+  {{#if fixes.length}}
+    <ul>
+      {{#each fixes}}
+        <li><b>{{rule_id}}</b> — {{title}} — {{created_at}}</li>
+      {{/each}}
+    </ul>
+  {{else}}
+    <p>No fixes.</p>
+  {{/if}}
+
+  <h2>Anomalies</h2>
+  <p>Anomalies detected: <b>{{anomalies}}</b></p>
+</body>
+</html>

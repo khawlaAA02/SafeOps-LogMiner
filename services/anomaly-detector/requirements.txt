@@ -1,7 +1,7 @@
 fastapi
 uvicorn
-pydantic
 python-dotenv
-pymongo
-scikit-learn
+psycopg2-binary
 numpy
+scikit-learn
+tensorflow-cpu

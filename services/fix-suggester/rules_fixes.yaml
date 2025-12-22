@@ -1,9 +1,31 @@
-fixes:
-  - trigger: "Secret exposé dans les logs"
-    suggestion: "Ne jamais écrire un mot de passe en clair. Utiliser un secret chiffré."
+# rules_fixes.yaml
+# Liste de règles → suggestion de correctif (simulation "auto-fix")
 
-  - trigger: "Pipeline en échec"
-    suggestion: "Analyser le job échoué. Ajouter des tests et des validations."
+rules:
+  - rule_id: "R001"
+    title: "Exposed secret in logs"
+    severity: "critical"
+    description: "Token / secret détecté dans les logs."
+    suggestion:
+      summary: "Mask secrets + use Vault"
+      yaml_patch: |
+        # Example GitHub Actions patch
+        # - Add secret masking and use GitHub Secrets / Vault
+        - name: Mask secrets
+          run: |
+            echo "::add-mask::${{ secrets.MY_TOKEN }}"
+        - name: Use Vault (example)
+          run: |
+            echo "Fetch secrets from Vault here"
 
-  - trigger: "Pipeline non pinné"
-    suggestion: "Utiliser un pin de version (ex: @v3) pour éviter les attaques d'injection."
+  - rule_id: "R002"
+    title: "Pipeline contains error keywords"
+    severity: "medium"
+    description: "Le mot ERROR est détecté dans les logs."
+    suggestion:
+      summary: "Fail fast + improve step error handling"
+      yaml_patch: |
+        - name: Fail fast on errors
+          run: |
+            set -e
+            echo "Stop pipeline if an error occurs"

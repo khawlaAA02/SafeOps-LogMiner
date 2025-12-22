@@ -1,16 +1,138 @@
 rules:
-  - field: message
-    contains: "password"
-    message: "Secret exposé dans les logs"
+  # --------------------------------------------------
+  # Secrets exposés
+  # --------------------------------------------------
+  - id: "R001"
+    title: "Exposed secret in logs"
+    description: "A token or secret was detected in pipeline output."
+    severity: "critical"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Secrets Management"
+      slsa: "SLSA - Provenance / Integrity"
+    match:
+      field: "regex_findings.secrets"
+      contains: ""
+    recommendation: "Remove secrets from logs, enable secret masking, and use a vault (GitHub Secrets, Vault, etc.)."
 
-  - field: message
-    contains: "token"
-    message: "Token trouvé dans les logs"
+  - id: "R001B"
+    title: "Secret exposed via semantic event"
+    description: "A secret was detected as a semantic event."
+    severity: "critical"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Secrets Management"
+      slsa: "SLSA - Provenance / Integrity"
+    match:
+      field: "events"
+      contains: "secret"
+    recommendation: "Rotate exposed secrets immediately and prevent secrets from being echoed in logs."
 
-  - field: status
-    contains: "failed"
-    message: "Pipeline en échec"
+  # --------------------------------------------------
+  # Erreurs de pipeline
+  # --------------------------------------------------
+  - id: "R002"
+    title: "Pipeline contains error keywords"
+    description: "Error-like keywords detected (failed, exception, error)."
+    severity: "medium"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Build Integrity"
+      slsa: "SLSA - Build"
+    match:
+      field: "regex_findings.errors"
+      contains: ""
+    recommendation: "Investigate failing steps and ensure security checks are not skipped."
 
-  - field: pipeline
-    contains: "deploy"
-    message: "Pipeline deploy doit être pinné (règle SLSA)"
+  - id: "R002B"
+    title: "Error detected as semantic event"
+    description: "An error was detected as a semantic event."
+    severity: "medium"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Build Integrity"
+      slsa: "SLSA - Build"
+    match:
+      field: "events"
+      contains: "error"
+    recommendation: "Review pipeline logs and fix the failing step."
+
+  # --------------------------------------------------
+  # Bypass / skip sécurité
+  # --------------------------------------------------
+  - id: "R003"
+    title: "Potential bypass attempt"
+    description: "The logs include bypass or skip wording."
+    severity: "high"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Pipeline Hardening"
+      slsa: "SLSA - Build Integrity"
+    match:
+      field: "regex_findings.bypass"
+      contains: ""
+    recommendation: "Block bypass flags, enforce required checks and branch protection rules."
+
+  - id: "R003B"
+    title: "Security bypass semantic event"
+    description: "A bypass attempt was detected in semantic events."
+    severity: "high"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Pipeline Hardening"
+      slsa: "SLSA - Build Integrity"
+    match:
+      field: "events"
+      contains: "bypass"
+    recommendation: "Disallow security bypass options and enforce mandatory CI policies."
+
+  # --------------------------------------------------
+  # URLs suspects / téléchargements
+  # --------------------------------------------------
+  - id: "R004"
+    title: "External URL usage in pipeline"
+    description: "External URLs were found in pipeline logs."
+    severity: "low"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Dependency Management"
+      slsa: "SLSA - Dependencies"
+    match:
+      field: "regex_findings.urls"
+      contains: ""
+    recommendation: "Verify external URLs and pin dependencies to trusted sources."
+
+  # --------------------------------------------------
+  # Mauvaises pratiques CI/CD (heuristiques)
+  # --------------------------------------------------
+  - id: "R005"
+    title: "Use of curl | bash pattern"
+    description: "Pipeline downloads and executes remote scripts."
+    severity: "high"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Supply Chain Attacks"
+      slsa: "SLSA - Source Integrity"
+    match:
+      field: "message"
+      contains: "curl"
+    recommendation: "Avoid piping curl directly to bash; review scripts and pin sources."
+
+  - id: "R006"
+    title: "Unpinned CI/CD action detected"
+    description: "CI/CD action is not pinned to a commit SHA."
+    severity: "medium"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Dependency Pinning"
+      slsa: "SLSA - Build Integrity"
+    match:
+      field: "message"
+      contains: "uses:"
+    recommendation: "Pin CI/CD actions to a specific commit SHA instead of tags."
+
+  # --------------------------------------------------
+  # Jobs / steps suspects
+  # --------------------------------------------------
+  - id: "R007"
+    title: "Suspicious job or step detected"
+    description: "A pipeline job or step may indicate risky behavior."
+    severity: "medium"
+    mapping:
+      owasp: "OWASP CI/CD-SEC: Pipeline Isolation"
+      slsa: "SLSA - Build Isolation"
+    match:
+      field: "events"
+      contains: "job_step"
+    recommendation: "Review job isolation and permissions for this pipeline step."
