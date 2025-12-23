@@ -61,6 +61,12 @@ Pour chaque pipeline :
 - HTML interactif
 - Fichier SARIF compatible GitHub Advanced Security
 
+
+
+
+https://github.com/user-attachments/assets/0b1d1883-2486-47dd-8d93-5966dbaf3ed2
+
+
 ---
 
 ## 🐳 Déploiement
