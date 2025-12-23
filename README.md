@@ -64,12 +64,16 @@ Pour chaque pipeline :
 
 
 
-https://github.com/user-attachments/assets/0b1d1883-2486-47dd-8d93-5966dbaf3ed2
 
 
----
+
 
 ## 🐳 Déploiement
 
 ```bash
 docker compose up --build
+
+## Video Démonstration
+
+https://github.com/user-attachments/assets/0b1d1883-2486-47dd-8d93-5966dbaf3ed2
+
