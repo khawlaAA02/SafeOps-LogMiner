@@ -1,3 +1,11 @@
+/**
+ * Dashboard API (MS7) — Improved & Soutenance-friendly
+ * - Robust pipeline list (fallback vuln_reports)
+ * - Better score logic + timeline score trend
+ * - Safer CORS config + small hardening
+ * - Cleaner SQL building + fewer edge-case bugs
+ */
+
 const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
@@ -10,11 +18,12 @@ app.use(express.json({ limit: "1mb" }));
 // Env
 // ---------------------------
 const PORT = Number(process.env.PORT || 3010);
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 
-// Important:
-// - REPORT_BASE_DOCKER: pour les liens utilisés entre conteneurs (report-generator)
-// - REPORT_BASE_PUBLIC: pour les liens cliquables depuis le navigateur (localhost)
+// CORS: allow single origin or comma-separated list
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
+const ALLOWED_ORIGINS = CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean);
+
+// Report links
 const REPORT_BASE_DOCKER = process.env.REPORT_BASE || "http://report-generator:3006";
 const REPORT_BASE_PUBLIC = process.env.REPORT_BASE_PUBLIC || "http://localhost:3006";
 
@@ -23,7 +32,13 @@ const REPORT_BASE_PUBLIC = process.env.REPORT_BASE_PUBLIC || "http://localhost:3
 // ---------------------------
 app.use(
   cors({
-    origin: CORS_ORIGIN,
+    origin: function (origin, cb) {
+      // allow non-browser tools (curl/postman)
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.includes("*")) return cb(null, true);
+      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      return cb(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   })
 );
@@ -37,6 +52,9 @@ const pool = new Pool({
   user: process.env.POSTGRES_USER || "safeops",
   password: process.env.POSTGRES_PASSWORD || "safeops",
   database: process.env.POSTGRES_DB || "safeops_security",
+  // keep it safe for docker
+  max: Number(process.env.PG_POOL_MAX || 10),
+  idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT || 30000),
 });
 
 // ---------------------------
@@ -58,7 +76,6 @@ function normSeverity(s) {
   return null;
 }
 
-// 0..100 conversion simple
 function severityWeight(sev) {
   const s = String(sev || "").toLowerCase();
   if (s === "critical") return 10;
@@ -67,32 +84,10 @@ function severityWeight(sev) {
   return 1;
 }
 
-// build WHERE safely (no "AND" bug)
+// Build WHERE safely
 function buildWhere(conditions) {
   const cleaned = conditions.filter(Boolean);
   return cleaned.length ? `WHERE ${cleaned.join(" AND ")}` : "";
-}
-
-function computeScoreFromAlerts(alerts, anomalyCount) {
-  let totalRisk = 0;
-  for (const a of alerts) totalRisk += severityWeight(a.severity);
-
-  const vulnPenalty = Math.min(80, totalRisk * 2);
-  const anomalyPenalty = Math.min(30, Number(anomalyCount || 0) * 2);
-
-  const raw = 100 - vulnPenalty - anomalyPenalty;
-  const value = Math.max(0, Math.min(100, raw));
-
-  return {
-    value,
-    details: {
-      totalFindings: alerts.length,
-      totalRisk,
-      anomalyCount: Number(anomalyCount || 0),
-      vulnPenalty,
-      anomalyPenalty,
-    },
-  };
 }
 
 // Extract findings from vuln_reports rows to a flat alerts array
@@ -108,14 +103,56 @@ function vulnRowsToAlerts(vulnRows) {
         title: f.title || f.rule_id || "Finding",
         severity: String(f.severity || "low").toLowerCase(),
         recommendation: f.recommendation || "",
-        evidence: Array.isArray(f.evidence) ? f.evidence.join(" | ") : (f.evidence || ""),
+        evidence: Array.isArray(f.evidence)
+        ? f.evidence.map((x) => (typeof x === "object" ? JSON.stringify(x) : String(x))).join(" | ")
+        : (typeof f.evidence === "object" ? JSON.stringify(f.evidence) : (f.evidence || "")),
+
         created_at: r.created_at,
+        mapping: f.mapping || {},
+        description: f.description || "",
       });
     }
   }
-  // newest first
   alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   return alerts;
+}
+
+function computeScoreFromAlerts(alerts, anomalyCount) {
+  let totalRisk = 0;
+  for (const a of alerts) totalRisk += severityWeight(a.severity);
+
+  const vulnPenalty = Math.min(80, totalRisk * 2);
+  const anomalyPenalty = Math.min(30, Number(anomalyCount || 0) * 2);
+
+  const raw = 100 - vulnPenalty - anomalyPenalty;
+  const value = Math.max(0, Math.min(100, Math.round(raw)));
+
+  return {
+    value,
+    details: {
+      totalFindings: alerts.length,
+      totalRisk,
+      anomalyCount: Number(anomalyCount || 0),
+      vulnPenalty,
+      anomalyPenalty,
+    },
+  };
+}
+
+function reportLinksFor(pipeline) {
+  if (!pipeline) return null;
+  return {
+    generate: `${REPORT_BASE_DOCKER}/report/${pipeline}`,
+    pdf: `${REPORT_BASE_DOCKER}/report/${pipeline}/pdf`,
+    html: `${REPORT_BASE_DOCKER}/report/${pipeline}/html`,
+    sarif: `${REPORT_BASE_DOCKER}/report/${pipeline}/sarif`,
+
+    // For browser
+    generate_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}`,
+    pdf_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/pdf`,
+    html_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/html`,
+    sarif_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/sarif`,
+  };
 }
 
 // ---------------------------
@@ -145,63 +182,68 @@ app.get("/dashboard", async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 200);
 
   try {
-    // 1) pipelines list (for dropdown)
-    const pipelines = (await pool.query(
+    // 1) pipelines list
+    let pipelines = (await pool.query(
       `SELECT DISTINCT pipeline_id FROM pipeline_runs ORDER BY pipeline_id`
-    )).rows.map(r => r.pipeline_id);
+    )).rows.map((r) => r.pipeline_id);
 
-    // 2) pipelineScores (score per pipeline) from latest run in pipeline_runs
-    // we compute "score" as (100 - severity_score) if severity_score is 0..100 risk
-    // If your severity_score already represents security score, just map directly.
-    const ps = (await pool.query(`
+    // Fallback if pipeline_runs empty (early demo)
+    if (!pipelines.length) {
+      pipelines = (await pool.query(
+        `SELECT DISTINCT pipeline FROM vuln_reports ORDER BY pipeline`
+      )).rows.map((r) => r.pipeline);
+    }
+
+    // 2) pipelineScores (latest risk from pipeline_runs)
+    // Interpretation: severity_score in pipeline_runs = risk (0..100) => score = 100 - risk
+    const pipelineScores = (await pool.query(`
       SELECT DISTINCT ON (pipeline_id)
         pipeline_id,
         ts,
-        severity_score
+        COALESCE(severity_score, 0) AS severity_score
       FROM pipeline_runs
       ORDER BY pipeline_id, ts DESC
-    `)).rows.map(r => {
+    `)).rows.map((r) => {
       const risk = Number(r.severity_score || 0);
-      // assume risk 0..100 => score 100-risk
-      const score = Math.max(0, Math.min(100, 100 - risk));
-      return { pipeline_id: r.pipeline_id, score, ts: r.ts };
+      const score = Math.max(0, Math.min(100, Math.round(100 - risk)));
+      return { pipeline_id: r.pipeline_id, score, ts: r.ts, risk };
     });
 
-    // 3) timeline for selected pipeline (line chart)
-    // if pipeline not selected => last 25 points overall
-    const conds = [];
-    const params = [];
+    // 3) timeline for selected pipeline (last 25 points)
+    const runConds = [];
+    const runParams = [];
     let i = 1;
 
     if (pipeline) {
-      conds.push(`pipeline_id = $${i++}`);
-      params.push(pipeline);
+      runConds.push(`pipeline_id = $${i++}`);
+      runParams.push(pipeline);
     }
-    const whereRuns = buildWhere(conds);
+    const whereRuns = buildWhere(runConds);
 
     const timelineRows = (await pool.query(
       `
-      SELECT ts, pipeline_id, run_id, severity_score
+      SELECT ts, pipeline_id, run_id, COALESCE(severity_score, 0) AS severity_score
       FROM pipeline_runs
       ${whereRuns}
       ORDER BY ts DESC
       LIMIT $${i}
       `,
-      [...params, 25]
+      [...runParams, 25]
     )).rows;
 
-    const timeline = timelineRows
-      .slice()
-      .reverse()
-      .map(r => ({
+    const timeline = timelineRows.slice().reverse().map((r) => {
+      const risk = Number(r.severity_score || 0);
+      const score = Math.max(0, Math.min(100, Math.round(100 - risk)));
+      return {
         time: r.ts,
         pipeline_id: r.pipeline_id,
         run_id: r.run_id,
-        severity_score: Number(r.severity_score || 0),
-      }));
+        severity_score: risk,  // risk
+        score,                 // score trend
+      };
+    });
 
-    // 4) vulns: filter from vuln_reports
-    // NOTE: vuln_reports uses column "pipeline" (not pipeline_id)
+    // 4) vulnerability reports (vuln_reports uses column pipeline)
     const vulnConds = [];
     const vulnParams = [];
     let j = 1;
@@ -211,9 +253,10 @@ app.get("/dashboard", async (req, res) => {
       vulnParams.push(pipeline);
     }
 
-    // q filter: search inside findings jsonb as text + pipeline/run_id/status
     if (q) {
-      vulnConds.push(`(pipeline ILIKE $${j} OR run_id ILIKE $${j} OR status ILIKE $${j} OR findings::text ILIKE $${j})`);
+      vulnConds.push(
+        `(pipeline ILIKE $${j} OR run_id ILIKE $${j} OR status ILIKE $${j} OR findings::text ILIKE $${j})`
+      );
       vulnParams.push(`%${q}%`);
       j++;
     }
@@ -234,7 +277,7 @@ app.get("/dashboard", async (req, res) => {
     const alertsAll = vulnRowsToAlerts(vulnRows);
 
     // severity filter at alert level
-    const alerts = severity ? alertsAll.filter(a => a.severity === severity) : alertsAll;
+    const alerts = severity ? alertsAll.filter((a) => a.severity === severity) : alertsAll;
 
     // 5) anomalies count (anomaly_reports has pipeline_id)
     let anomalyCount = 0;
@@ -245,57 +288,49 @@ app.get("/dashboard", async (req, res) => {
       )).rows[0]?.c || 0);
     }
 
-    // 6) fixes (latest for selected pipeline if column exists)
-    // fix_reports now has pipeline_id (you created it)
-    const fixConds = [];
-    const fixParams = [];
-    let k = 1;
+// 6) fixes (optional: table may not exist)
+let fixes = [];
+try {
+  const fixConds = [];
+  const fixParams = [];
+  let k = 1;
 
-    if (pipeline) {
-      fixConds.push(`pipeline_id = $${k++}`);
-      fixParams.push(pipeline);
-    }
-    const whereFix = buildWhere(fixConds);
+  if (pipeline) {
+    fixConds.push(`pipeline_id = $${k++}`);
+    fixParams.push(pipeline);
+  }
+  const whereFix = buildWhere(fixConds);
 
-    const fixes = (await pool.query(
-      `
-      SELECT id, rule_id, title, created_at
-      FROM fix_reports
-      ${whereFix}
-      ORDER BY created_at DESC
-      LIMIT 20
-      `,
-      fixParams
-    )).rows;
+  fixes = (await pool.query(
+    `
+    SELECT id, pipeline_id, run_id, rule_id, title, created_at
+    FROM fix_reports
+    ${whereFix}
+    ORDER BY created_at DESC
+    LIMIT 20
+    `,
+    fixParams
+  )).rows;
+} catch (e) {
+  // 42P01 = undefined_table
+  if (e && e.code !== "42P01") throw e;
+  fixes = [];
+}
 
-    // 7) global score
+
+    // 7) Score (best: from alerts + anomaly)
     const score = computeScoreFromAlerts(alerts, anomalyCount);
 
-    // 8) report links
-    // - For Docker internal usage: REPORT_BASE_DOCKER
-    // - For browser: REPORT_BASE_PUBLIC
-    const reportLinks = pipeline
-      ? {
-          generate: `${REPORT_BASE_DOCKER}/report/${pipeline}`,
-          pdf: `${REPORT_BASE_DOCKER}/report/${pipeline}/pdf`,
-          html: `${REPORT_BASE_DOCKER}/report/${pipeline}/html`,
-          sarif: `${REPORT_BASE_DOCKER}/report/${pipeline}/sarif`,
-
-          // Helpful for frontend:
-          generate_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}`,
-          pdf_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/pdf`,
-          html_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/html`,
-          sarif_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/sarif`,
-        }
-      : null;
+    // 8) Report links (docker + public)
+    const reportLinks = reportLinksFor(pipeline);
 
     res.json({
       meta: { pipeline, severity, q, limit },
       score,
-      pipelines,           // ✅ dropdown
-      pipelineScores: ps,  // ✅ bar chart
-      timeline,            // ✅ line chart
-      vulns: vulnRows.map(v => ({
+      pipelines,
+      pipelineScores,
+      timeline,
+      vulns: vulnRows.map((v) => ({
         id: v.id,
         pipeline: v.pipeline,
         run_id: v.run_id,
@@ -315,7 +350,4 @@ app.get("/dashboard", async (req, res) => {
   }
 });
 
-// ---------------------------
-// Start
-// ---------------------------
 app.listen(PORT, () => console.log(`Dashboard API running on ${PORT}`));

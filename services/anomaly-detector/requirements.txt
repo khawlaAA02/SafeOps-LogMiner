@@ -1,7 +1,8 @@
-fastapi
-uvicorn
-python-dotenv
-psycopg2-binary
-numpy
-scikit-learn
-tensorflow-cpu
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+psycopg2-binary==2.9.9
+numpy==1.26.4
+scikit-learn==1.5.2
+tensorflow==2.16.1
+TF_ENABLED=false

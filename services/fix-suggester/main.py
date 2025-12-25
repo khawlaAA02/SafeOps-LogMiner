@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from typing import Tuple 
 
 APP_NAME = "fix-suggester"
 
@@ -108,16 +109,18 @@ def on_startup():
 def health():
     return {"status": "ok", "service": APP_NAME}
 
+
+
 # ------------- Patch generation (simple & demo-friendly) -------------
-def build_patch(original_yaml: str, triggers: List[str]) -> str:
+def build_patch(original_yaml: str, triggers: List[str]) -> Tuple[str, str]:
     """
-    Génère un patch "diff" simple.
-    (Dans un vrai outil, tu ferais un vrai patch unifié + application réelle.)
+    Génère un patch "diff" simple + un YAML final (preview).
+    (Dans un vrai outil, on ferait un vrai patch unifié + application réelle.)
     """
     lines = original_yaml.splitlines()
-    # Ajout d’un "hardening baseline" en haut s'il manque permissions
     patched_lines = list(lines)
 
+    # Ajout d’un "hardening baseline" en haut si permissions manquent
     if not any(l.strip().startswith("permissions:") for l in patched_lines):
         patched_lines.insert(0, "permissions: read-all")
 
@@ -131,19 +134,19 @@ def build_patch(original_yaml: str, triggers: List[str]) -> str:
         patched_lines.append("  group: safeops-${{ github.ref }}")
         patched_lines.append("  cancel-in-progress: true")
 
-    # Diff fake (suffisant pour démo prof)
-    before = "\n".join(lines) + "\n"
     after = "\n".join(patched_lines) + "\n"
 
+    # Diff fake (suffisant pour démo prof)
     patch = (
         "--- before.yml\n"
         "+++ after.yml\n"
         "@@ -1,3 +1,4 @@\n"
         "+permissions: read-all\n\n"
     )
-    # On met le "after" comme bloc pour être clair
     patch += "\n# --- AFTER (preview) ---\n" + after
+
     return patch, after
+
 
 @app.post("/fix")
 def suggest_fix(req: FixRequest):

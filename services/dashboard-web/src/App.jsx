@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bar, Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -9,9 +9,10 @@ import {
   LineElement,
   Tooltip,
   Legend,
+  Filler,
 } from "chart.js";
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend, Filler);
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
 const REPORT_BASE = import.meta.env.VITE_REPORT_BASE || "http://localhost:3006";
@@ -24,9 +25,9 @@ const tones = {
   na: "bg-slate-50 text-slate-700 border-slate-200",
 };
 
-function Pill({ children, tone = "na" }) {
+function Pill({ children, tone = "na", className = "" }) {
   return (
-    <span className={`text-xs px-2.5 py-1 rounded-full border ${tones[tone] || tones.na}`}>
+    <span className={`text-xs px-2.5 py-1 rounded-full border ${tones[tone] || tones.na} ${className}`}>
       {children}
     </span>
   );
@@ -34,16 +35,14 @@ function Pill({ children, tone = "na" }) {
 
 function Button({ variant = "solid", className = "", ...props }) {
   const base =
-    "px-4 py-2 rounded-xl text-sm font-medium transition inline-flex items-center justify-center gap-2";
+    "px-4 py-2 rounded-xl text-sm font-medium transition inline-flex items-center justify-center gap-2 select-none disabled:opacity-50 disabled:cursor-not-allowed";
   const styles =
     variant === "solid"
-      ? "bg-slate-900 text-white hover:opacity-90"
+      ? "bg-slate-900 text-white hover:opacity-90 active:opacity-80"
       : variant === "success"
-      ? "bg-emerald-600 text-white hover:opacity-90"
-      : variant === "ghost"
-      ? "bg-white border border-slate-200 hover:bg-slate-50 text-slate-800"
-      : variant === "outline"
-      ? "bg-white border border-slate-200 hover:bg-slate-50 text-slate-800"
+      ? "bg-emerald-600 text-white hover:opacity-90 active:opacity-80"
+      : variant === "danger"
+      ? "bg-red-600 text-white hover:opacity-90 active:opacity-80"
       : "bg-white border border-slate-200 hover:bg-slate-50 text-slate-800";
   return <button className={`${base} ${styles} ${className}`} {...props} />;
 }
@@ -109,7 +108,7 @@ function Modal({ open, title, onClose, children }) {
       <div className="absolute left-1/2 top-1/2 w-[95vw] max-w-3xl -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <div className="font-semibold text-slate-900">{title}</div>
-          <Button variant="ghost" onClick={onClose} className="px-3 py-1.5">
+          <Button variant="outline" onClick={onClose} className="px-3 py-1.5">
             Fermer
           </Button>
         </div>
@@ -119,17 +118,25 @@ function Modal({ open, title, onClose, children }) {
   );
 }
 
+function scoreTheme(score) {
+  if (score == null) return { pill: "bg-slate-50 text-slate-700 border-slate-200", bar: "bg-slate-400", ring: "ring-slate-200" };
+  if (score >= 80) return { pill: "bg-emerald-50 text-emerald-700 border-emerald-200", bar: "bg-emerald-500", ring: "ring-emerald-200" };
+  if (score >= 50) return { pill: "bg-amber-50 text-amber-800 border-amber-200", bar: "bg-amber-500", ring: "ring-amber-200" };
+  return { pill: "bg-red-50 text-red-700 border-red-200", bar: "bg-red-500", ring: "ring-red-200" };
+}
+
 export default function App() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // UI filters (draft + applied)
+  // Draft filters
   const [pipelineDraft, setPipelineDraft] = useState("all");
   const [severityDraft, setSeverityDraft] = useState("all");
   const [qDraft, setQDraft] = useState("");
   const [limitDraft, setLimitDraft] = useState(20);
 
+  // Applied filters
   const [pipeline, setPipeline] = useState("all");
   const [severity, setSeverity] = useState("all");
   const [q, setQ] = useState("");
@@ -138,11 +145,10 @@ export default function App() {
   const [tab, setTab] = useState("overview"); // overview | alerts | reports
   const [selectedAlert, setSelectedAlert] = useState(null);
 
-  const pipelines = useMemo(() => {
-    // ✅ take pipelines from API (more reliable than pipelineScores)
-    const list = data?.pipelines || [];
-    return ["all", ...Array.from(new Set(list))];
-  }, [data]);
+  // Live refresh
+  const [live, setLive] = useState(false);
+  const [liveEvery, setLiveEvery] = useState(10); // seconds
+  const liveTimer = useRef(null);
 
   const scoreValue = data?.score?.value ?? null;
   const scoreDetails = data?.score?.details ?? {};
@@ -153,14 +159,19 @@ export default function App() {
   const timeline = data?.timeline || [];
   const reportLinks = data?.reportLinks || null;
 
-  const scoreTone =
-    scoreValue == null
-      ? "from-slate-700 to-slate-900"
-      : scoreValue >= 80
-      ? "from-emerald-500 to-emerald-700"
-      : scoreValue >= 50
-      ? "from-amber-500 to-amber-700"
-      : "from-red-500 to-red-700";
+  const pipelines = useMemo(() => {
+    const list = data?.pipelines || [];
+    return ["all", ...Array.from(new Set(list))];
+  }, [data]);
+
+  const sevCounts = useMemo(() => {
+    const c = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const a of alerts) {
+      const s = String(a.severity || "").toLowerCase();
+      if (c[s] != null) c[s] += 1;
+    }
+    return c;
+  }, [alerts]);
 
   const load = async (opts = {}) => {
     const p = opts.pipeline ?? pipeline;
@@ -195,6 +206,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (liveTimer.current) {
+      clearInterval(liveTimer.current);
+      liveTimer.current = null;
+    }
+    if (!live) return;
+
+    const intervalMs = clamp(Number(liveEvery || 10), 3, 60) * 1000;
+    liveTimer.current = setInterval(() => load(), intervalMs);
+
+    return () => {
+      if (liveTimer.current) clearInterval(liveTimer.current);
+      liveTimer.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, liveEvery, pipeline, severity, q, limit]);
+
   const applyFilters = () => {
     setPipeline(pipelineDraft);
     setSeverity(severityDraft);
@@ -215,29 +243,44 @@ export default function App() {
     load({ pipeline: "all", severity: "all", q: "", limit: 20 });
   };
 
-  // Charts
   const barData = useMemo(() => {
     const labels = (data?.pipelineScores || []).map((p) => p.pipeline_id);
     const values = (data?.pipelineScores || []).map((p) => p.score);
-    return { labels, datasets: [{ label: "Score sécurité (0–100)", data: values }] };
+    return {
+      labels,
+      datasets: [{ label: "Score sécurité (0–100)", data: values, borderRadius: 10, barThickness: 18 }],
+    };
   }, [data]);
 
-  // ✅ timeline in API: { time, severity_score } -> securityScore = 100 - severity_score
+  const chartOptionsBase = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { boxWidth: 10, boxHeight: 10 } },
+        tooltip: { mode: "index", intersect: false },
+      },
+      scales: {
+        x: { grid: { display: false } },
+        y: { min: 0, max: 100 },
+      },
+    }),
+    []
+  );
+
   const lineData = useMemo(() => {
     const t = (timeline || []).slice(-30);
     const labels = t.map((x) => new Date(x.time).toLocaleTimeString());
     const values = t.map((x) => 100 - Number(x.severity_score || 0));
-    return { labels, datasets: [{ label: "Tendance du score (0–100)", data: values, tension: 0.35 }] };
+    return { labels, datasets: [{ label: "Tendance du score (0–100)", data: values, tension: 0.35, fill: true }] };
   }, [timeline]);
 
-  // Reports actions
   const canReport = pipeline !== "all" && pipeline !== "" && pipeline != null;
 
   const getReportUrl = (type) => {
-    // type: "generate" | "html" | "pdf" | "sarif"
-    // Prefer *_public links if dashboard-api provides them
     if (reportLinks?.[`${type}_public`]) return reportLinks[`${type}_public`];
     if (type === "generate") return `${REPORT_BASE}/report/${pipeline}`;
+    if (type === "zip") return `${REPORT_BASE}/report/${pipeline}/zip?mode=latest`;
     return `${REPORT_BASE}/report/${pipeline}/${type}`;
   };
 
@@ -247,59 +290,72 @@ export default function App() {
       const r = await fetch(getReportUrl("generate"));
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error || j?.detail || "Échec génération report");
-      alert("Rapport généré ✅ (PDF/HTML/SARIF disponibles)");
+      alert("Rapport généré ✅");
     } catch (e) {
       alert(e?.message || "Erreur génération report");
     }
   };
 
-  const openHtml = () => {
-    if (!canReport) return alert("Choisis un pipeline.");
-    window.open(getReportUrl("html"), "_blank");
-  };
+  const openInNew = (url) => window.open(url, "_blank");
 
-  const downloadPdf = () => {
-    if (!canReport) return alert("Choisis un pipeline.");
-    window.open(getReportUrl("pdf"), "_blank");
-  };
-
-  const downloadSarif = () => {
-    if (!canReport) return alert("Choisis un pipeline.");
-    window.open(getReportUrl("sarif"), "_blank");
-  };
+  const theme = scoreTheme(scoreValue);
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Topbar */}
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/80 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col gap-3">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-slate-900">SafeOps — Security Dashboard</h1>
-              <p className="text-sm text-slate-600">Vulnérabilités • Anomalies • Fixes • Rapports</p>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-bold">
+                S
+              </div>
+              <div>
+                <h1 className="text-xl font-bold tracking-tight text-slate-900">SafeOps — Security Dashboard</h1>
+                <p className="text-sm text-slate-600">Vulnérabilités • Anomalies • Fixes • Rapports</p>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={() => load()} variant="ghost">
+              <Button onClick={() => load()} variant="outline">
                 {loading ? "Actualisation..." : "Refresh"}
               </Button>
 
-              <Button onClick={generateReport} variant="success">
+              <Button onClick={() => setLive((v) => !v)} variant={live ? "danger" : "outline"} className="px-3">
+                {live ? "Live: ON" : "Live: OFF"}
+              </Button>
+
+              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <span className="text-xs text-slate-500">Chaque</span>
+                <input
+                  type="number"
+                  min={3}
+                  max={60}
+                  className="w-16 text-sm outline-none"
+                  value={liveEvery}
+                  onChange={(e) => setLiveEvery(clamp(Number(e.target.value || 10), 3, 60))}
+                  disabled={!live}
+                />
+                <span className="text-xs text-slate-500">s</span>
+              </div>
+
+              <Button onClick={generateReport} variant="success" disabled={!canReport}>
                 Générer report (MS6)
               </Button>
-              <Button onClick={openHtml} variant="outline" className="px-3">
-                Ouvrir HTML
+              <Button onClick={() => canReport && openInNew(getReportUrl("html"))} variant="outline" className="px-3" disabled={!canReport}>
+                HTML
               </Button>
-              <Button onClick={downloadPdf} variant="outline" className="px-3">
+              <Button onClick={() => canReport && openInNew(getReportUrl("pdf"))} variant="outline" className="px-3" disabled={!canReport}>
                 PDF
               </Button>
-              <Button onClick={downloadSarif} variant="outline" className="px-3">
+              <Button onClick={() => canReport && openInNew(getReportUrl("sarif"))} variant="outline" className="px-3" disabled={!canReport}>
                 SARIF
+              </Button>
+              <Button onClick={() => canReport && openInNew(getReportUrl("zip"))} variant="outline" className="px-3" disabled={!canReport}>
+                ZIP
               </Button>
             </div>
           </div>
 
-          {/* Filters */}
           <div className="flex flex-col lg:flex-row lg:items-end gap-3">
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 flex-1">
               <div>
@@ -339,9 +395,7 @@ export default function App() {
                   placeholder="R001, token, ERROR, title..."
                   value={qDraft}
                   onChange={(e) => setQDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") applyFilters();
-                  }}
+                  onKeyDown={(e) => e.key === "Enter" && applyFilters()}
                 />
               </div>
 
@@ -360,50 +414,38 @@ export default function App() {
 
             <div className="flex gap-2">
               <Button onClick={applyFilters}>Appliquer</Button>
-              <Button onClick={resetFilters} variant="ghost">
+              <Button onClick={resetFilters} variant="outline">
                 Reset
               </Button>
             </div>
           </div>
 
-          {/* Tabs */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setTab("overview")}
-              className={`px-3 py-1.5 rounded-xl text-sm border ${
-                tab === "overview"
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "bg-white border-slate-200 text-slate-700"
-              }`}
-            >
-              Overview
-            </button>
-            <button
-              onClick={() => setTab("alerts")}
-              className={`px-3 py-1.5 rounded-xl text-sm border ${
-                tab === "alerts"
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "bg-white border-slate-200 text-slate-700"
-              }`}
-            >
-              Alerts ({alerts.length})
-            </button>
-            <button
-              onClick={() => setTab("reports")}
-              className={`px-3 py-1.5 rounded-xl text-sm border ${
-                tab === "reports"
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "bg-white border-slate-200 text-slate-700"
-              }`}
-            >
-              Reports
-            </button>
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="flex gap-2">
+              {["overview", "alerts", "reports"].map((k) => (
+                <button
+                  key={k}
+                  onClick={() => setTab(k)}
+                  className={`px-3 py-1.5 rounded-xl text-sm border ${
+                    tab === k ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {k === "overview" ? "Overview" : k === "alerts" ? `Alerts (${alerts.length})` : "Reports"}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Pill tone="critical">Critical: {sevCounts.critical}</Pill>
+              <Pill tone="high">High: {sevCounts.high}</Pill>
+              <Pill tone="medium">Medium: {sevCounts.medium}</Pill>
+              <Pill tone="low">Low: {sevCounts.low}</Pill>
+            </div>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto p-6 space-y-6">
-        {/* Error */}
         {err ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
             <div className="font-semibold">Erreur</div>
@@ -411,124 +453,61 @@ export default function App() {
           </div>
         ) : null}
 
-        {/* Score banner */}
-        <div className={`rounded-2xl bg-gradient-to-r ${scoreTone} text-white p-5 shadow-sm`}>
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        {/* Score card colored + progress */}
+        <div className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ring-4 ${theme.ring}`}>
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
-              <div className="text-xs opacity-90">Score sécurité global</div>
-              <div className="text-3xl font-semibold">{scoreValue == null ? "--" : scoreValue}/100</div>
-              <div className="text-xs opacity-90 mt-1">
-                Findings: {scoreDetails.totalFindings ?? 0} • Anomalies: {scoreDetails.anomalyCount ?? 0} • Risk:{" "}
-                {scoreDetails.totalRisk ?? 0}
+              <div className="text-xs text-slate-500">Score sécurité global</div>
+              <div className="text-4xl font-bold text-slate-900">{scoreValue == null ? "--" : `${scoreValue}/100`}</div>
+              <div className="text-sm text-slate-600 mt-1">
+                Findings: {scoreDetails.totalFindings ?? 0} • Anomalies: {scoreDetails.anomalyCount ?? 0} • Risk: {scoreDetails.totalRisk ?? 0}
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Pill tone="na">API: {API_BASE}</Pill>
-              <Pill tone="na">Reports: {REPORT_BASE}</Pill>
-              <Pill tone="na">{alerts.length} alerts</Pill>
-              {pipeline !== "all" ? <Pill tone="na">Pipeline: {pipeline}</Pill> : null}
+
+            <div className="flex flex-wrap gap-2 justify-start lg:justify-end">
+              <span className={`text-xs px-3 py-1 rounded-full border ${theme.pill}`}>API: {API_BASE}</span>
+              <span className={`text-xs px-3 py-1 rounded-full border ${theme.pill}`}>Reports: {REPORT_BASE}</span>
+              <span className={`text-xs px-3 py-1 rounded-full border ${theme.pill}`}>Pipeline: {pipeline === "all" ? "all" : pipeline}</span>
+              <span className={`text-xs px-3 py-1 rounded-full border ${theme.pill}`}>Live: {live ? "ON" : "OFF"}</span>
             </div>
+          </div>
+
+          <div className="mt-4 h-2.5 w-full rounded-full bg-slate-100 overflow-hidden border border-slate-200">
+            <div className={`h-full ${theme.bar}`} style={{ width: `${clamp(Number(scoreValue ?? 0), 0, 100)}%` }} />
           </div>
         </div>
 
-        {/* Content */}
         {loading && !data ? <Empty title="Chargement..." desc="Récupération des données depuis Dashboard API." /> : null}
-
-        {!loading && !data ? (
-          <Empty title="Aucune donnée" desc="Vérifie que dashboard-api (3010) et Postgres sont bien up." />
-        ) : null}
+        {!loading && !data ? <Empty title="Aucune donnée" desc="Vérifie dashboard-api (3010) et Postgres." /> : null}
 
         {data ? (
           <>
-            {/* KPIs */}
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <KPI title="Pipelines" value={data?.pipelines?.length || 0} hint="Pipelines détectés" icon="⛓️" />
               <KPI title="Vuln reports" value={vulns.length} hint="VulnDetector (MS3)" icon="🛡️" />
               <KPI title="Fixes" value={fixes.length} hint="FixSuggester (MS4)" icon="🧩" />
-              <KPI title="Timeline points" value={timeline.length} hint="pipeline_runs (severity_score)" icon="📈" />
+              <KPI title="Timeline points" value={timeline.length} hint="pipeline_runs" icon="📈" />
             </div>
 
             {tab === "overview" ? (
-              <>
-                {/* Charts */}
-                <div className="grid lg:grid-cols-2 gap-6">
-                  <Panel
-                    title="Score sécurité par pipeline"
-                    subtitle="Plus élevé = mieux (0–100)"
-                    right={<Pill tone="na">Bar</Pill>}
-                  >
-                    <div className="h-[320px]">
-                      <Bar data={barData} options={{ responsive: true, maintainAspectRatio: false }} />
-                    </div>
-                  </Panel>
-
-                  <Panel
-                    title="Tendance du score"
-                    subtitle="Courbe basée sur pipeline_runs (severity_score)"
-                    right={<Pill tone="na">Line</Pill>}
-                  >
-                    <div className="h-[320px]">
-                      <Line data={lineData} options={{ responsive: true, maintainAspectRatio: false }} />
-                    </div>
-                    <div className="mt-2 text-xs text-slate-500">
-                      Note: score_point = 100 - severity_score.
-                    </div>
-                  </Panel>
-                </div>
-
-                {/* Recent anomalies */}
-                <Panel
-                  title="Dernières anomalies"
-                  subtitle="Détections récentes (MS5)"
-                  right={<Pill tone="na">{anomalies.length} events</Pill>}
-                >
-                  <div className="overflow-auto">
-                    <table className="w-full text-sm">
-                      <thead className="text-xs text-slate-500">
-                        <tr className="border-b border-slate-200">
-                          <th className="text-left py-2 pr-2">Pipeline</th>
-                          <th className="text-left py-2 pr-2">Run</th>
-                          <th className="text-left py-2 pr-2">Model</th>
-                          <th className="text-left py-2 pr-2">Score</th>
-                          <th className="text-left py-2 pr-2">Anomaly?</th>
-                          <th className="text-left py-2 pr-2">Time</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {anomalies.slice(0, 8).map((a, i) => (
-                          <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
-                            <td className="py-2 pr-2 font-medium">{a.pipeline_id}</td>
-                            <td className="py-2 pr-2">{a.run_id || "-"}</td>
-                            <td className="py-2 pr-2">
-                              <Pill tone="na">{a.model_used || "?"}</Pill>
-                            </td>
-                            <td className="py-2 pr-2">{Number(a.anomaly_score || 0).toFixed(3)}</td>
-                            <td className="py-2 pr-2">
-                              {a.is_anomaly ? <Pill tone="critical">YES</Pill> : <Pill tone="low">NO</Pill>}
-                            </td>
-                            <td className="py-2 pr-2 text-slate-500">{fmtDate(a.ts)}</td>
-                          </tr>
-                        ))}
-                        {anomalies.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="py-4 text-slate-600">
-                              Aucune anomalie trouvée.
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
+              <div className="grid lg:grid-cols-2 gap-6">
+                <Panel title="Score sécurité par pipeline" subtitle="Plus élevé = mieux (0–100)" right={<Pill tone="na">Bar</Pill>}>
+                  <div className="h-[320px]">
+                    <Bar data={barData} options={chartOptionsBase} />
                   </div>
                 </Panel>
-              </>
+
+                <Panel title="Tendance du score" subtitle="Basée sur pipeline_runs (severity_score)" right={<Pill tone="na">Line</Pill>}>
+                  <div className="h-[320px]">
+                    <Line data={lineData} options={chartOptionsBase} />
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500">score_point = 100 - severity_score</div>
+                </Panel>
+              </div>
             ) : null}
 
             {tab === "alerts" ? (
-              <Panel
-                title="Vulnérabilités (Alerts)"
-                subtitle="Clique une ligne pour voir les détails"
-                right={<Pill tone="na">{alerts.length} items</Pill>}
-              >
+              <Panel title="Vulnérabilités (Alerts)" subtitle="Clique une ligne pour voir les détails" right={<Pill tone="na">{alerts.length} items</Pill>}>
                 <div className="overflow-auto">
                   <table className="w-full text-sm">
                     <thead className="text-xs text-slate-500">
@@ -554,9 +533,7 @@ export default function App() {
                           </td>
                           <td className="py-2 pr-2">
                             <div className="font-medium text-slate-900">{a.title || "-"}</div>
-                            {a.recommendation ? (
-                              <div className="text-xs text-slate-500 truncate max-w-[620px]">{a.recommendation}</div>
-                            ) : null}
+                            {a.recommendation ? <div className="text-xs text-slate-500 truncate max-w-[620px]">{a.recommendation}</div> : null}
                           </td>
                           <td className="py-2 pr-2">
                             <Pill tone={a.severity}>{a.severity}</Pill>
@@ -589,22 +566,24 @@ export default function App() {
                 >
                   <div className="space-y-3">
                     <div className="text-sm text-slate-700">
-                      Pipeline sélectionné :{" "}
-                      <span className="font-semibold">{pipeline === "all" ? "Aucun (all)" : pipeline}</span>
+                      Pipeline sélectionné : <span className="font-semibold">{pipeline === "all" ? "Aucun (all)" : pipeline}</span>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      <Button onClick={generateReport} variant="success">
+                      <Button onClick={generateReport} variant="success" disabled={!canReport}>
                         Générer report
                       </Button>
-                      <Button onClick={openHtml} variant="outline" className="px-3">
+                      <Button onClick={() => canReport && openInNew(getReportUrl("html"))} variant="outline" disabled={!canReport}>
                         Ouvrir HTML
                       </Button>
-                      <Button onClick={downloadPdf} variant="outline" className="px-3">
+                      <Button onClick={() => canReport && openInNew(getReportUrl("pdf"))} variant="outline" disabled={!canReport}>
                         Télécharger PDF
                       </Button>
-                      <Button onClick={downloadSarif} variant="outline" className="px-3">
+                      <Button onClick={() => canReport && openInNew(getReportUrl("sarif"))} variant="outline" disabled={!canReport}>
                         Télécharger SARIF
+                      </Button>
+                      <Button onClick={() => canReport && openInNew(getReportUrl("zip"))} variant="outline" disabled={!canReport}>
+                        Télécharger ZIP
                       </Button>
                     </div>
 
@@ -614,15 +593,12 @@ export default function App() {
                       <div>HTML: {getReportUrl("html")}</div>
                       <div>PDF: {getReportUrl("pdf")}</div>
                       <div>SARIF: {getReportUrl("sarif")}</div>
+                      <div>ZIP: {getReportUrl("zip")}</div>
                     </div>
                   </div>
                 </Panel>
 
-                <Panel
-                  title="Fix suggestions"
-                  subtitle="Dernières corrections générées (MS4)"
-                  right={<Pill tone="na">{fixes.length}</Pill>}
-                >
+                <Panel title="Fix suggestions" subtitle="Dernières corrections (MS4)" right={<Pill tone="na">{fixes.length}</Pill>}>
                   <div className="space-y-2">
                     {fixes.slice(0, 12).map((f) => (
                       <div key={f.id} className="rounded-xl border border-slate-200 p-3">
@@ -633,15 +609,12 @@ export default function App() {
                         <div className="text-xs text-slate-500 mt-1">{fmtDate(f.created_at)}</div>
                       </div>
                     ))}
-                    {fixes.length === 0 ? (
-                      <div className="text-sm text-slate-600">Aucune suggestion de correction disponible.</div>
-                    ) : null}
+                    {fixes.length === 0 ? <div className="text-sm text-slate-600">Aucune suggestion disponible.</div> : null}
                   </div>
                 </Panel>
               </div>
             ) : null}
 
-            {/* Details modal */}
             <Modal
               open={!!selectedAlert}
               title={`Détails — ${selectedAlert?.rule_id || ""} ${selectedAlert?.title || ""}`}
