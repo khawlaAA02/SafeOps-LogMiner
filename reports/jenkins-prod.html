@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SafeOps Report - jenkins-prod</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+    .sev-critical { color: #b00020; font-weight: 700; }
+    .sev-high { color: #c25a00; font-weight: 700; }
+    .sev-medium { color: #8a6d00; font-weight: 700; }
+    .sev-low { color: #2a6b2a; font-weight: 700; }
+    code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>SafeOps-LogMiner — Security Report</h1>
+  <div class="card">
+    <div><b>Pipeline:</b> jenkins-prod</div>
+    <div><b>Date:</b> 2025-12-25T09:55:22.263Z</div>
+    <div><b>Security score:</b> 66/100</div>
+    <div><b>Findings:</b> 2 | <b>Anomalies:</b> 0</div>
+  </div>
+
+  <h2>Vulnerabilities</h2>
+      <div class="card">
+        <div><b>Report #3</b> — status: done — Mon Dec 22 2025 15:27:49 GMT+0000 (Coordinated Universal Time)</div>
+          <ul>
+              <li>
+                <span class="sev-critical">[critical]</span>
+                <b>Kubernetes secrets in logs</b> — <br/>
+                <i>Recommendation:</i> Mask secrets
+              </li>
+              <li>
+                <span class="sev-high">[high]</span>
+                <b>No image scanning</b> — <br/>
+                <i>Recommendation:</i> Enable Trivy
+              </li>
+          </ul>
+      </div>
+
+  <h2>Fix suggestions (latest)</h2>
+    <ul>
+        <li><b>R001</b> — Exposed secret in logs — Wed Dec 24 2025 17:03:56 GMT+0000 (Coordinated Universal Time)</li>
+        <li><b>R001</b> — Fix: move secrets to GitHub Secrets — Wed Dec 24 2025 15:47:16 GMT+0000 (Coordinated Universal Time)</li>
+    </ul>
+
+  <h2>Anomalies</h2>
+  <p>Anomalies detected: <b>0</b></p>
+</body>
+</html>

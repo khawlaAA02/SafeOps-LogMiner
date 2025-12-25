@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SafeOps-LogMiner",
+          "informationUri": "https://example.local/safeops"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "R001",
+          "level": "error",
+          "message": {
+            "text": "Exposed secret in logs - A token or secret was detected in pipeline output."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Provenance / Integrity",
+              "owasp": "OWASP CI/CD-SEC: Secrets Management"
+            },
+            "recommendation": "Remove secrets from logs, enable secret masking, and use a vault (GitHub Secrets, Vault, etc.).",
+            "evidence": [
+              "AKIA1234567890ABCDEF"
+            ]
+          }
+        },
+        {
+          "ruleId": "R001B",
+          "level": "error",
+          "message": {
+            "text": "Secret exposed via semantic event - A secret was detected as a semantic event."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Provenance / Integrity",
+              "owasp": "OWASP CI/CD-SEC: Secrets Management"
+            },
+            "recommendation": "Rotate exposed secrets immediately and prevent secrets from being echoed in logs.",
+            "evidence": [
+              {
+                "line": "AKIA1234567890ABCDEF12",
+                "type": "secret",
+                "value": "AKIA1234567890ABCDEF",
+                "line_no": 5
+              }
+            ]
+          }
+        },
+        {
+          "ruleId": "R002",
+          "level": "warning",
+          "message": {
+            "text": "Pipeline contains error keywords - Error-like keywords detected (failed, exception, error)."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Build",
+              "owasp": "OWASP CI/CD-SEC: Build Integrity"
+            },
+            "recommendation": "Investigate failing steps and ensure security checks are not skipped.",
+            "evidence": [
+              "ERROR",
+              "failed",
+              "exception"
+            ]
+          }
+        },
+        {
+          "ruleId": "R002B",
+          "level": "warning",
+          "message": {
+            "text": "Error detected as semantic event - An error was detected as a semantic event."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Build",
+              "owasp": "OWASP CI/CD-SEC: Build Integrity"
+            },
+            "recommendation": "Review pipeline logs and fix the failing step.",
+            "evidence": [
+              {
+                "line": "ERROR: build failed with exception",
+                "type": "error",
+                "value": "ERROR: build failed with exception",
+                "line_no": 3
+              }
+            ]
+          }
+        },
+        {
+          "ruleId": "R003",
+          "level": "error",
+          "message": {
+            "text": "Potential bypass attempt - The logs include bypass or skip wording."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Build Integrity",
+              "owasp": "OWASP CI/CD-SEC: Pipeline Hardening"
+            },
+            "recommendation": "Block bypass flags, enforce required checks and branch protection rules.",
+            "evidence": [
+              "skip checks",
+              "--no-verify"
+            ]
+          }
+        },
+        {
+          "ruleId": "R003B",
+          "level": "error",
+          "message": {
+            "text": "Security bypass semantic event - A bypass attempt was detected in semantic events."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Build Integrity",
+              "owasp": "OWASP CI/CD-SEC: Pipeline Hardening"
+            },
+            "recommendation": "Disallow security bypass options and enforce mandatory CI policies.",
+            "evidence": [
+              {
+                "line": "skip checks --no-verify",
+                "type": "bypass",
+                "value": "skip checks --no-verify",
+                "line_no": 6
+              }
+            ]
+          }
+        },
+        {
+          "ruleId": "R004",
+          "level": "note",
+          "message": {
+            "text": "External URL usage in pipeline - External URLs were found in pipeline logs."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Dependencies",
+              "owasp": "OWASP CI/CD-SEC: Dependency Management"
+            },
+            "recommendation": "Verify external URLs and pin dependencies to trusted sources.",
+            "evidence": [
+              "https://example.com"
+            ]
+          }
+        },
+        {
+          "ruleId": "R007",
+          "level": "warning",
+          "message": {
+            "text": "Suspicious job or step detected - A pipeline job or step may indicate risky behavior."
+          },
+          "properties": {
+            "pipeline": "pipeline-demo",
+            "mapping": {
+              "slsa": "SLSA - Build Isolation",
+              "owasp": "OWASP CI/CD-SEC: Pipeline Isolation"
+            },
+            "recommendation": "Review job isolation and permissions for this pipeline step.",
+            "evidence": [
+              {
+                "line": "##[group] Build",
+                "type": "job_step",
+                "value": "Build",
+                "line_no": 1
+              },
+              {
+                "line": "Run echo \"start\"",
+                "type": "job_step",
+                "value": "echo \"start\"",
+                "line_no": 2
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

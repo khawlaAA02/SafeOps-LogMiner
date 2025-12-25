@@ -1,16 +1,18 @@
+# Node
 node_modules/
 **/node_modules/
 
-.env
-**/.env
-
-reports/
-exports/
-*.pdf
-*.sarif
-*.html
-*.zip
-
+# Build
 dist/
 build/
 .vite/
+**/dist/
+**/build/
+**/.vite/
+
+# Env
+.env
+**/.env
+
+# Logs
+*.log

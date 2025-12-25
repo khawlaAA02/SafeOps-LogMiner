@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SafeOps Report - github-actions</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+    .sev-critical { color: #b00020; font-weight: 700; }
+    .sev-high { color: #c25a00; font-weight: 700; }
+    .sev-medium { color: #8a6d00; font-weight: 700; }
+    .sev-low { color: #2a6b2a; font-weight: 700; }
+    code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>SafeOps-LogMiner — Security Report</h1>
+  <div class="card">
+    <div><b>Pipeline:</b> github-actions</div>
+    <div><b>Date:</b> 2025-12-24T19:15:59.079Z</div>
+    <div><b>Security score:</b> 14/100</div>
+    <div><b>Findings:</b> 18 | <b>Anomalies:</b> 3</div>
+  </div>
+
+  <h2>Vulnerabilities</h2>
+      <div class="card">
+        <div><b>Report #5</b> — status: failed — Wed Dec 24 2025 17:02:50 GMT+0000 (Coordinated Universal Time)</div>
+          <ul>
+              <li>
+                <span class="sev-critical">[critical]</span>
+                <b>Exposed secret in logs</b> — A token or secret was detected in pipeline output.<br/>
+                <i>Recommendation:</i> Remove secrets from logs, enable secret masking, and use a vault (GitHub Secrets, Vault, etc.).
+              </li>
+              <li>
+                <span class="sev-critical">[critical]</span>
+                <b>Secret exposed via semantic event</b> — A secret was detected as a semantic event.<br/>
+                <i>Recommendation:</i> Rotate exposed secrets immediately and prevent secrets from being echoed in logs.
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Pipeline contains error keywords</b> — Error-like keywords detected (failed, exception, error).<br/>
+                <i>Recommendation:</i> Investigate failing steps and ensure security checks are not skipped.
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Error detected as semantic event</b> — An error was detected as a semantic event.<br/>
+                <i>Recommendation:</i> Review pipeline logs and fix the failing step.
+              </li>
+              <li>
+                <span class="sev-high">[high]</span>
+                <b>Potential bypass attempt</b> — The logs include bypass or skip wording.<br/>
+                <i>Recommendation:</i> Block bypass flags, enforce required checks and branch protection rules.
+              </li>
+              <li>
+                <span class="sev-high">[high]</span>
+                <b>Security bypass semantic event</b> — A bypass attempt was detected in semantic events.<br/>
+                <i>Recommendation:</i> Disallow security bypass options and enforce mandatory CI policies.
+              </li>
+              <li>
+                <span class="sev-low">[low]</span>
+                <b>External URL usage in pipeline</b> — External URLs were found in pipeline logs.<br/>
+                <i>Recommendation:</i> Verify external URLs and pin dependencies to trusted sources.
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Suspicious job or step detected</b> — A pipeline job or step may indicate risky behavior.<br/>
+                <i>Recommendation:</i> Review job isolation and permissions for this pipeline step.
+              </li>
+          </ul>
+      </div>
+      <div class="card">
+        <div><b>Report #4</b> — status: failed — Wed Dec 24 2025 17:01:34 GMT+0000 (Coordinated Universal Time)</div>
+          <ul>
+              <li>
+                <span class="sev-critical">[critical]</span>
+                <b>Exposed secret in logs</b> — A token or secret was detected in pipeline output.<br/>
+                <i>Recommendation:</i> Remove secrets from logs, enable secret masking, and use a vault (GitHub Secrets, Vault, etc.).
+              </li>
+              <li>
+                <span class="sev-critical">[critical]</span>
+                <b>Secret exposed via semantic event</b> — A secret was detected as a semantic event.<br/>
+                <i>Recommendation:</i> Rotate exposed secrets immediately and prevent secrets from being echoed in logs.
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Pipeline contains error keywords</b> — Error-like keywords detected (failed, exception, error).<br/>
+                <i>Recommendation:</i> Investigate failing steps and ensure security checks are not skipped.
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Error detected as semantic event</b> — An error was detected as a semantic event.<br/>
+                <i>Recommendation:</i> Review pipeline logs and fix the failing step.
+              </li>
+              <li>
+                <span class="sev-high">[high]</span>
+                <b>Potential bypass attempt</b> — The logs include bypass or skip wording.<br/>
+                <i>Recommendation:</i> Block bypass flags, enforce required checks and branch protection rules.
+              </li>
+              <li>
+                <span class="sev-high">[high]</span>
+                <b>Security bypass semantic event</b> — A bypass attempt was detected in semantic events.<br/>
+                <i>Recommendation:</i> Disallow security bypass options and enforce mandatory CI policies.
+              </li>
+              <li>
+                <span class="sev-low">[low]</span>
+                <b>External URL usage in pipeline</b> — External URLs were found in pipeline logs.<br/>
+                <i>Recommendation:</i> Verify external URLs and pin dependencies to trusted sources.
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Suspicious job or step detected</b> — A pipeline job or step may indicate risky behavior.<br/>
+                <i>Recommendation:</i> Review job isolation and permissions for this pipeline step.
+              </li>
+          </ul>
+      </div>
+      <div class="card">
+        <div><b>Report #1</b> — status: done — Sun Dec 21 2025 15:27:49 GMT+0000 (Coordinated Universal Time)</div>
+          <ul>
+              <li>
+                <span class="sev-critical">[critical]</span>
+                <b>Hardcoded AWS Key</b> — <br/>
+                <i>Recommendation:</i> Use GitHub Secrets
+              </li>
+              <li>
+                <span class="sev-medium">[medium]</span>
+                <b>Docker runs as root</b> — <br/>
+                <i>Recommendation:</i> Use USER in Dockerfile
+              </li>
+          </ul>
+      </div>
+
+  <h2>Fix suggestions (latest)</h2>
+    <ul>
+        <li><b>R001</b> — Exposed secret in logs — Wed Dec 24 2025 17:03:56 GMT+0000 (Coordinated Universal Time)</li>
+        <li><b>R001</b> — Fix: move secrets to GitHub Secrets — Wed Dec 24 2025 15:47:16 GMT+0000 (Coordinated Universal Time)</li>
+    </ul>
+
+  <h2>Anomalies</h2>
+  <p>Anomalies detected: <b>3</b></p>
+</body>
+</html>

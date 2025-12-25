@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SafeOps-LogMiner",
+          "informationUri": "https://example.local/safeops"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "R020",
+          "level": "error",
+          "message": {
+            "text": "Kubernetes secrets in logs -"
+          },
+          "properties": {
+            "pipeline": "jenkins-prod",
+            "mapping": {},
+            "recommendation": "Mask secrets",
+            "evidence": null
+          }
+        },
+        {
+          "ruleId": "R021",
+          "level": "error",
+          "message": {
+            "text": "No image scanning -"
+          },
+          "properties": {
+            "pipeline": "jenkins-prod",
+            "mapping": {},
+            "recommendation": "Enable Trivy",
+            "evidence": null
+          }
+        }
+      ]
+    }
+  ]
+}

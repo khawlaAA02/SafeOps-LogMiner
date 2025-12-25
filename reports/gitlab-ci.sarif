@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SafeOps-LogMiner",
+          "informationUri": "https://example.local/safeops"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "R010",
+          "level": "error",
+          "message": {
+            "text": "Insecure curl download -"
+          },
+          "properties": {
+            "pipeline": "gitlab-ci",
+            "mapping": {},
+            "recommendation": "Use checksum validation",
+            "evidence": null
+          }
+        },
+        {
+          "ruleId": "R011",
+          "level": "note",
+          "message": {
+            "text": "Missing dependency scan -"
+          },
+          "properties": {
+            "pipeline": "gitlab-ci",
+            "mapping": {},
+            "recommendation": "Enable SCA",
+            "evidence": null
+          }
+        }
+      ]
+    }
+  ]
+}
