@@ -19,14 +19,14 @@ SafeOps-LogMiner fournit une **surveillance de sécurité continue basée sur le
 
 ## 🎯 Objectifs
 
-- 🔐 Détecter les **fuites de secrets**
-- ⚠️ Identifier les **erreurs critiques et comportements suspects**
-- 🛡️ Appliquer les règles **OWASP CI/CD Top 10**
-- 🔗 Vérifier la conformité **SLSA**
-- 🤖 Détecter les anomalies via **Machine Learning**
-- 🛠 Générer des **correctifs YAML automatiques**
-- 📄 Produire des rapports **PDF / HTML / SARIF**
-- 📊 Fournir un **dashboard temps réel**
+- Détecter les **fuites de secrets**
+- Identifier les **erreurs critiques et comportements suspects**
+- Appliquer les règles **OWASP CI/CD Top 10**
+- Vérifier la conformité **SLSA**
+- Détecter les anomalies via **Machine Learning**
+- Générer des **correctifs YAML automatiques**
+- Produire des rapports **PDF / HTML / SARIF**
+- Fournir un **dashboard temps réel**
 
 ---
 
