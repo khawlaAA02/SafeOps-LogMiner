@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>SafeOps Report - ci-demo</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; padding: 16px; border-radius: 10px; margin-bottom: 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#f2f2f2; font-size:12px; }
+    .ok { background:#e7ffe7; }
+    .warn { background:#fff3cd; }
+    .bad { background:#ffe7e7; }
+    table { width:100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
+    th { background: #f7f7f7; text-align:left; }
+    code { background:#f6f6f6; padding:2px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+
+<h2>SafeOps-LogMiner — DevSecOps Security Report</h2>
+<div class="card">
+  <div><b>Pipeline:</b> ci-demo</div>
+  <div><b>Date:</b> 2025-12-26T22:17:27.935Z</div>
+  <div class="row" style="margin-top:10px;">
+    <span class="pill warn">
+      Score: 64/100
+    </span>
+    <span class="pill">Vulns: 3</span>
+    <span class="pill">Risk: 15</span>
+    <span class="pill">Anomalies: 3</span>
+    <span class="pill">Mode: all</span>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Résumé</h3>
+  <ul>
+    <li>Penalty vuln: <b>30</b></li>
+    <li>Penalty anomalies: <b>6</b></li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Vulnerabilities (table: <code>vulnerabilities</code>)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>run_id</th>
+          <th>rule_id</th>
+          <th>title</th>
+          <th>severity</th>
+          <th>detected_at</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr>
+            <td>2cf92ae8-1dab-4df8-bf84-706e908576f4</td>
+            <td>SLSA-BYPASS</td>
+            <td>Security checks bypass detected</td>
+            <td>HIGH</td>
+            <td>Fri Dec 26 2025 17:59:36 GMT+0000 (Coordinated Universal Time)</td>
+          </tr>
+          <tr>
+            <td>2cf92ae8-1dab-4df8-bf84-706e908576f4</td>
+            <td>PIPELINE-FAIL</td>
+            <td>Pipeline failure indicators</td>
+            <td>MEDIUM</td>
+            <td>Fri Dec 26 2025 17:59:36 GMT+0000 (Coordinated Universal Time)</td>
+          </tr>
+          <tr>
+            <td>2cf92ae8-1dab-4df8-bf84-706e908576f4</td>
+            <td>PIPELINE-FAIL</td>
+            <td>Pipeline failure indicators</td>
+            <td>MEDIUM</td>
+            <td>Fri Dec 26 2025 17:59:36 GMT+0000 (Coordinated Universal Time)</td>
+          </tr>
+      </tbody>
+    </table>
+</div>
+
+<div class="card">
+  <h3>Fix Suggestions (table: <code>fix_reports</code>)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>id</th>
+          <th>run_id</th>
+          <th>rule_id</th>
+          <th>title</th>
+          <th>safe</th>
+          <th>created_at</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr>
+            <td>1</td>
+            <td>87583d55-9c30-41cd-9803-23dbcabd8450</td>
+            <td>SECRET-LEAK</td>
+            <td>Secrets exposed in CI logs</td>
+            <td>true</td>
+            <td>Fri Dec 26 2025 16:40:54 GMT+0000 (Coordinated Universal Time)</td>
+          </tr>
+      </tbody>
+    </table>
+</div>
+
+<div class="card">
+  <h3>Anomalies (table: <code>anomaly_reports</code>)</h3>
+  <p>Nombre d'anomalies détectées (is_anomaly=true): <b>3</b></p>
+</div>
+
+<div class="card">
+  <h3>Patches (table: <code>patch_applies</code>)</h3>
+    <p>Aucun patch (ou simulation) enregistré pour ce pipeline.</p>
+</div>
+
+</body>
+</html>

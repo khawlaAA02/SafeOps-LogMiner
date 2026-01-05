@@ -1,353 +1,541 @@
-/**
- * Dashboard API (MS7) — Improved & Soutenance-friendly
- * - Robust pipeline list (fallback vuln_reports)
- * - Better score logic + timeline score trend
- * - Safer CORS config + small hardening
- * - Cleaner SQL building + fewer edge-case bugs
- */
-
 const express = require("express");
+const helmet = require("helmet");
 const cors = require("cors");
+const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
 const { Pool } = require("pg");
-require("dotenv").config();
 
 const app = express();
+
+app.disable("x-powered-by");
+app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
+app.use(morgan("combined"));
 
-// ---------------------------
-// Env
-// ---------------------------
-const PORT = Number(process.env.PORT || 3010);
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean)
+  : null;
 
-// CORS: allow single origin or comma-separated list
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
-const ALLOWED_ORIGINS = CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean);
-
-// Report links
-const REPORT_BASE_DOCKER = process.env.REPORT_BASE || "http://report-generator:3006";
-const REPORT_BASE_PUBLIC = process.env.REPORT_BASE_PUBLIC || "http://localhost:3006";
-
-// ---------------------------
-// CORS
-// ---------------------------
 app.use(
   cors({
-    origin: function (origin, cb) {
-      // allow non-browser tools (curl/postman)
-      if (!origin) return cb(null, true);
-      if (ALLOWED_ORIGINS.includes("*")) return cb(null, true);
-      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"));
-    },
+    origin: corsOrigins && corsOrigins.length ? corsOrigins : true,
     credentials: true,
   })
 );
 
-// ---------------------------
-// DB
-// ---------------------------
-const pool = new Pool({
-  host: process.env.POSTGRES_HOST || "postgres",
-  port: Number(process.env.POSTGRES_PORT || 5432),
-  user: process.env.POSTGRES_USER || "safeops",
-  password: process.env.POSTGRES_PASSWORD || "safeops",
-  database: process.env.POSTGRES_DB || "safeops_security",
-  // keep it safe for docker
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: Number(process.env.RATE_LIMIT_PER_MIN || 120),
+    standardHeaders: true,
+    legacyHeaders: false,
+  })
+);
+
+// -------------------------
+// PostgreSQL
+// -------------------------
+const pgPool = new Pool({
+  host: process.env.DB_HOST || "postgres",
+  port: Number(process.env.DB_PORT || 5432),
+  user: process.env.DB_USER || "safeops",
+  password: process.env.DB_PASSWORD || "safeops",
+  database: process.env.DB_NAME || "safeops_security",
   max: Number(process.env.PG_POOL_MAX || 10),
-  idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT || 30000),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
 });
 
-// ---------------------------
-// Helpers
-// ---------------------------
-function parseJsonMaybe(v) {
-  if (!v) return null;
-  if (typeof v === "object") return v;
-  try {
-    return JSON.parse(v);
-  } catch {
-    return null;
-  }
+async function checkPostgres() {
+  const r = await pgPool.query("SELECT 1 as ok");
+  return r?.rows?.[0]?.ok === 1;
 }
 
-function normSeverity(s) {
-  const x = String(s || "").toLowerCase().trim();
-  if (["critical", "high", "medium", "low"].includes(x)) return x;
-  return null;
-}
+function computeScore(row) {
+  const secrets = Number(row.secrets_count || 0);
+  const bypass = Number(row.bypass_count || 0);
+  const errors = Number(row.error_count || 0);
+  const urls = Number(row.urls_count || 0);
+  const sev = Number(row.severity_score || 0);
 
-function severityWeight(sev) {
-  const s = String(sev || "").toLowerCase();
-  if (s === "critical") return 10;
-  if (s === "high") return 7;
-  if (s === "medium") return 4;
-  return 1;
-}
+  const riskPoints =
+    secrets * 12 + bypass * 8 + errors * 2 + urls * 1 + Math.floor(sev / 5);
 
-// Build WHERE safely
-function buildWhere(conditions) {
-  const cleaned = conditions.filter(Boolean);
-  return cleaned.length ? `WHERE ${cleaned.join(" AND ")}` : "";
-}
-
-// Extract findings from vuln_reports rows to a flat alerts array
-function vulnRowsToAlerts(vulnRows) {
-  const alerts = [];
-  for (const r of vulnRows) {
-    const findings = Array.isArray(r.findings) ? r.findings : parseJsonMaybe(r.findings) || [];
-    for (const f of findings) {
-      alerts.push({
-        pipeline: r.pipeline,
-        run_id: r.run_id,
-        rule_id: f.rule_id || "SAFEOPS_RULE",
-        title: f.title || f.rule_id || "Finding",
-        severity: String(f.severity || "low").toLowerCase(),
-        recommendation: f.recommendation || "",
-        evidence: Array.isArray(f.evidence)
-        ? f.evidence.map((x) => (typeof x === "object" ? JSON.stringify(x) : String(x))).join(" | ")
-        : (typeof f.evidence === "object" ? JSON.stringify(f.evidence) : (f.evidence || "")),
-
-        created_at: r.created_at,
-        mapping: f.mapping || {},
-        description: f.description || "",
-      });
-    }
-  }
-  alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  return alerts;
-}
-
-function computeScoreFromAlerts(alerts, anomalyCount) {
-  let totalRisk = 0;
-  for (const a of alerts) totalRisk += severityWeight(a.severity);
-
-  const vulnPenalty = Math.min(80, totalRisk * 2);
-  const anomalyPenalty = Math.min(30, Number(anomalyCount || 0) * 2);
-
-  const raw = 100 - vulnPenalty - anomalyPenalty;
-  const value = Math.max(0, Math.min(100, Math.round(raw)));
+  const score = Math.max(0, Math.min(100, 100 - riskPoints));
 
   return {
-    value,
-    details: {
-      totalFindings: alerts.length,
-      totalRisk,
-      anomalyCount: Number(anomalyCount || 0),
-      vulnPenalty,
-      anomalyPenalty,
-    },
+    score,
+    riskPoints,
+    breakdown: { secrets, bypass, errors, urls, severity_score: sev },
   };
 }
 
-function reportLinksFor(pipeline) {
-  if (!pipeline) return null;
-  return {
-    generate: `${REPORT_BASE_DOCKER}/report/${pipeline}`,
-    pdf: `${REPORT_BASE_DOCKER}/report/${pipeline}/pdf`,
-    html: `${REPORT_BASE_DOCKER}/report/${pipeline}/html`,
-    sarif: `${REPORT_BASE_DOCKER}/report/${pipeline}/sarif`,
-
-    // For browser
-    generate_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}`,
-    pdf_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/pdf`,
-    html_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/html`,
-    sarif_public: `${REPORT_BASE_PUBLIC}/report/${pipeline}/sarif`,
-  };
+function bucketFromScore(score) {
+  if (score <= 40) return "critical";
+  if (score <= 60) return "high";
+  if (score <= 80) return "medium";
+  return "low";
 }
 
-// ---------------------------
+// -------------------------
 // Routes
-// ---------------------------
+// -------------------------
+app.get("/", (_req, res) => res.json({ name: "dashboard-api", ok: true }));
+app.get("/ping", (_req, res) => res.json({ ok: true }));
+
 app.get("/health", async (_req, res) => {
+  let pgOk = false;
   try {
-    await pool.query("SELECT 1");
-    res.json({ status: "ok" });
+    pgOk = await checkPostgres();
+  } catch {
+    pgOk = false;
+  }
+  res.status(pgOk ? 200 : 503).json({ status: pgOk ? "ok" : "degraded", postgres: pgOk });
+});
+
+/**
+ * ✅ /dashboard/reports?pipeline=xxx
+ */
+app.get("/dashboard/reports", (req, res) => {
+  const pipeline = String(req.query.pipeline || "").trim();
+  if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+  const basePublic = process.env.REPORT_BASE_PUBLIC || "http://127.0.0.1:3006";
+
+  res.json({
+    pipeline,
+    generate: `${basePublic}/report/${encodeURIComponent(pipeline)}?mode=all`,
+    html: `${basePublic}/report/${encodeURIComponent(pipeline)}/html`,
+    pdf: `${basePublic}/report/${encodeURIComponent(pipeline)}/pdf`,
+    sarif: `${basePublic}/report/${encodeURIComponent(pipeline)}/sarif`,
+    zip: `${basePublic}/report/${encodeURIComponent(pipeline)}/zip?mode=all`,
+  });
+});
+
+/**
+ * ✅ /pipelines : pipeline_id + runs
+ */
+app.get("/pipelines", async (_req, res, next) => {
+  try {
+    const r = await pgPool.query(
+      `SELECT pipeline_id, COUNT(*)::int AS runs
+       FROM pipeline_runs
+       GROUP BY pipeline_id
+       ORDER BY runs DESC`
+    );
+    res.json({ items: r.rows });
   } catch (e) {
-    res.status(500).json({ status: "degraded", error: String(e.message || e) });
+    next(e);
   }
 });
 
 /**
- * GET /dashboard
- * Query:
- *  - pipeline=all|p1|...
- *  - severity=all|critical|high|medium|low
- *  - q=search text
- *  - limit=20
+ * ✅ /dashboard/summary (tri ts)
  */
-app.get("/dashboard", async (req, res) => {
-  const pipeline = req.query.pipeline && req.query.pipeline !== "all" ? String(req.query.pipeline) : null;
-  const severity = req.query.severity && req.query.severity !== "all" ? normSeverity(req.query.severity) : null;
-  const q = String(req.query.q || "").trim();
-  const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 200);
-
+app.get("/dashboard/summary", async (req, res, next) => {
   try {
-    // 1) pipelines list
-    let pipelines = (await pool.query(
-      `SELECT DISTINCT pipeline_id FROM pipeline_runs ORDER BY pipeline_id`
-    )).rows.map((r) => r.pipeline_id);
+    const pipeline = String(req.query.pipeline || "").trim();
+    const limit = Math.min(Number(req.query.limit || 30), 200);
 
-    // Fallback if pipeline_runs empty (early demo)
-    if (!pipelines.length) {
-      pipelines = (await pool.query(
-        `SELECT DISTINCT pipeline FROM vuln_reports ORDER BY pipeline`
-      )).rows.map((r) => r.pipeline);
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const r = await pgPool.query(
+      `SELECT
+         ts, pipeline_id, source, status, duration_sec,
+         error_count, secrets_count, urls_count, bypass_count,
+         steps_count, severity_score
+       FROM pipeline_runs
+       WHERE pipeline_id = $1
+       ORDER BY ts DESC
+       LIMIT $2`,
+      [pipeline, limit]
+    );
+
+    const rows = r.rows;
+    if (!rows.length) {
+      return res.json({
+        pipeline,
+        score: null,
+        findings: 0,
+        anomalies: 0,
+        risk: 0,
+        buckets: { critical: 0, high: 0, medium: 0, low: 0 },
+        lastRun: null,
+      });
     }
 
-    // 2) pipelineScores (latest risk from pipeline_runs)
-    // Interpretation: severity_score in pipeline_runs = risk (0..100) => score = 100 - risk
-    const pipelineScores = (await pool.query(`
-      SELECT DISTINCT ON (pipeline_id)
-        pipeline_id,
-        ts,
-        COALESCE(severity_score, 0) AS severity_score
-      FROM pipeline_runs
-      ORDER BY pipeline_id, ts DESC
-    `)).rows.map((r) => {
-      const risk = Number(r.severity_score || 0);
-      const score = Math.max(0, Math.min(100, Math.round(100 - risk)));
-      return { pipeline_id: r.pipeline_id, score, ts: r.ts, risk };
-    });
+    let sumScore = 0;
+    let count = 0;
+    let findings = 0;
+    let anomalies = 0; // démo: bypass_count
+    let risk = 0;
 
-    // 3) timeline for selected pipeline (last 25 points)
-    const runConds = [];
-    const runParams = [];
-    let i = 1;
+    const buckets = { critical: 0, high: 0, medium: 0, low: 0 };
 
-    if (pipeline) {
-      runConds.push(`pipeline_id = $${i++}`);
-      runParams.push(pipeline);
-    }
-    const whereRuns = buildWhere(runConds);
+    for (const row of rows) {
+      const { score, riskPoints } = computeScore(row);
+      sumScore += score;
+      count += 1;
 
-    const timelineRows = (await pool.query(
-      `
-      SELECT ts, pipeline_id, run_id, COALESCE(severity_score, 0) AS severity_score
-      FROM pipeline_runs
-      ${whereRuns}
-      ORDER BY ts DESC
-      LIMIT $${i}
-      `,
-      [...runParams, 25]
-    )).rows;
+      const f =
+        Number(row.error_count || 0) +
+        Number(row.secrets_count || 0) +
+        Number(row.urls_count || 0) +
+        Number(row.bypass_count || 0);
 
-    const timeline = timelineRows.slice().reverse().map((r) => {
-      const risk = Number(r.severity_score || 0);
-      const score = Math.max(0, Math.min(100, Math.round(100 - risk)));
-      return {
-        time: r.ts,
-        pipeline_id: r.pipeline_id,
-        run_id: r.run_id,
-        severity_score: risk,  // risk
-        score,                 // score trend
-      };
-    });
+      findings += f;
+      anomalies += Number(row.bypass_count || 0);
+      risk += riskPoints;
 
-    // 4) vulnerability reports (vuln_reports uses column pipeline)
-    const vulnConds = [];
-    const vulnParams = [];
-    let j = 1;
-
-    if (pipeline) {
-      vulnConds.push(`pipeline = $${j++}`);
-      vulnParams.push(pipeline);
+      buckets[bucketFromScore(score)] += 1;
     }
 
-    if (q) {
-      vulnConds.push(
-        `(pipeline ILIKE $${j} OR run_id ILIKE $${j} OR status ILIKE $${j} OR findings::text ILIKE $${j})`
-      );
-      vulnParams.push(`%${q}%`);
-      j++;
-    }
-
-    const whereVuln = buildWhere(vulnConds);
-
-    const vulnRows = (await pool.query(
-      `
-      SELECT id, pipeline, run_id, source, status, findings, created_at
-      FROM vuln_reports
-      ${whereVuln}
-      ORDER BY created_at DESC
-      LIMIT $${j}
-      `,
-      [...vulnParams, limit]
-    )).rows;
-
-    const alertsAll = vulnRowsToAlerts(vulnRows);
-
-    // severity filter at alert level
-    const alerts = severity ? alertsAll.filter((a) => a.severity === severity) : alertsAll;
-
-    // 5) anomalies count (anomaly_reports has pipeline_id)
-    let anomalyCount = 0;
-    if (pipeline) {
-      anomalyCount = Number((await pool.query(
-        `SELECT COUNT(*)::int AS c FROM anomaly_reports WHERE pipeline_id=$1 AND is_anomaly=true`,
-        [pipeline]
-      )).rows[0]?.c || 0);
-    }
-
-// 6) fixes (optional: table may not exist)
-let fixes = [];
-try {
-  const fixConds = [];
-  const fixParams = [];
-  let k = 1;
-
-  if (pipeline) {
-    fixConds.push(`pipeline_id = $${k++}`);
-    fixParams.push(pipeline);
-  }
-  const whereFix = buildWhere(fixConds);
-
-  fixes = (await pool.query(
-    `
-    SELECT id, pipeline_id, run_id, rule_id, title, created_at
-    FROM fix_reports
-    ${whereFix}
-    ORDER BY created_at DESC
-    LIMIT 20
-    `,
-    fixParams
-  )).rows;
-} catch (e) {
-  // 42P01 = undefined_table
-  if (e && e.code !== "42P01") throw e;
-  fixes = [];
-}
-
-
-    // 7) Score (best: from alerts + anomaly)
-    const score = computeScoreFromAlerts(alerts, anomalyCount);
-
-    // 8) Report links (docker + public)
-    const reportLinks = reportLinksFor(pipeline);
+    const avgScore = Math.round(sumScore / count);
+    const lastRun = rows[0];
 
     res.json({
-      meta: { pipeline, severity, q, limit },
-      score,
-      pipelines,
-      pipelineScores,
-      timeline,
-      vulns: vulnRows.map((v) => ({
-        id: v.id,
-        pipeline: v.pipeline,
-        run_id: v.run_id,
-        source: v.source,
-        status: v.status,
-        created_at: v.created_at,
-        findings: Array.isArray(v.findings) ? v.findings : (parseJsonMaybe(v.findings) || []),
-      })),
-      fixes,
-      anomalies: pipeline ? [{ pipeline_id: pipeline, count: anomalyCount }] : [],
-      alerts,
-      reportLinks,
+      pipeline,
+      score: avgScore,
+      findings,
+      anomalies,
+      risk,
+      buckets,
+      lastRun: {
+        ts: lastRun.ts,
+        status: lastRun.status,
+        source: lastRun.source,
+        duration_sec: lastRun.duration_sec,
+        severity_score: lastRun.severity_score,
+      },
     });
   } catch (e) {
-    console.error("dashboard error:", e);
-    res.status(500).json({ error: "Dashboard API error", detail: String(e.message || e) });
+    next(e);
   }
 });
 
-app.listen(PORT, () => console.log(`Dashboard API running on ${PORT}`));
+/**
+ * ✅ /dashboard/scores (CTE tri ts)
+ * limit = nb de runs retenus par pipeline (max 50)
+ */
+app.get("/dashboard/scores", async (req, res, next) => {
+  try {
+    const perPipeline = Math.min(Number(req.query.limit || 30), 50);
+
+    const r = await pgPool.query(
+      `
+      WITH ranked AS (
+        SELECT
+          pipeline_id,
+          error_count, secrets_count, urls_count, bypass_count, severity_score,
+          ts,
+          ROW_NUMBER() OVER (PARTITION BY pipeline_id ORDER BY ts DESC) AS rn
+        FROM pipeline_runs
+      ),
+      lastn AS (
+        SELECT * FROM ranked WHERE rn <= $1
+      )
+      SELECT
+        pipeline_id,
+        COUNT(*)::int AS runs,
+        AVG(COALESCE(error_count,0)) AS avg_errors,
+        AVG(COALESCE(secrets_count,0)) AS avg_secrets,
+        AVG(COALESCE(bypass_count,0)) AS avg_bypass,
+        AVG(COALESCE(urls_count,0)) AS avg_urls,
+        AVG(COALESCE(severity_score,0)) AS avg_severity
+      FROM lastn
+      GROUP BY pipeline_id
+      ORDER BY pipeline_id ASC
+      `,
+      [perPipeline]
+    );
+
+    const items = r.rows.map((x) => {
+      const rowForScore = {
+        error_count: Number(x.avg_errors),
+        secrets_count: Number(x.avg_secrets),
+        bypass_count: Number(x.avg_bypass),
+        urls_count: Number(x.avg_urls),
+        severity_score: Number(x.avg_severity),
+      };
+      const { score } = computeScore(rowForScore);
+      return { pipeline_id: x.pipeline_id, score, runs: Number(x.runs) };
+    });
+
+    res.json({ per_pipeline: perPipeline, items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * ✅ /dashboard/trend (tri ts)
+ */
+app.get("/dashboard/trend", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    const limit = Math.min(Number(req.query.limit || 20), 200);
+
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const r = await pgPool.query(
+      `SELECT
+         ts,
+         error_count, secrets_count, urls_count, bypass_count, severity_score
+       FROM pipeline_runs
+       WHERE pipeline_id = $1
+       ORDER BY ts DESC
+       LIMIT $2`,
+      [pipeline, limit]
+    );
+
+    const points = r.rows
+      .reverse()
+      .map((row) => ({ t: row.ts, score: computeScore(row).score }));
+
+    res.json({ pipeline, points });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// -------------------------
+// Error handler
+// -------------------------
+app.use((err, _req, res, _next) => {
+  console.error("❌ dashboard-api error:", err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+// -------------------------
+// Start
+// -------------------------
+const port = Number(process.env.PORT || 3010);
+app.listen(port, () => console.log(`🚀 dashboard-api running on port ${port}`));
+// -------------------------
+// Helpers pagination
+// -------------------------
+function clampInt(v, def, min, max) {
+  const n = Number(v);
+  if (Number.isNaN(n)) return def;
+  return Math.max(min, Math.min(max, n));
+}
+
+// =========================
+// Runs
+// =========================
+app.get("/dashboard/runs", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const offset = clampInt(req.query.offset, 0, 0, 100000);
+    const status = String(req.query.status || "").trim(); // optional
+
+    const where = ["pipeline_id = $1"];
+    const params = [pipeline];
+    let idx = 2;
+
+    if (status) {
+      where.push(`status = $${idx++}`);
+      params.push(status);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const totalQ = `SELECT COUNT(*)::int AS c FROM pipeline_runs ${whereSql}`;
+    const listQ = `
+      SELECT
+        run_id::text AS run_id,
+        pipeline_id,
+        source,
+        status,
+        duration_sec,
+        error_count, secrets_count, urls_count, bypass_count,
+        steps_count, severity_score,
+        created_at, ts
+      FROM pipeline_runs
+      ${whereSql}
+      ORDER BY created_at DESC
+      LIMIT $${idx++} OFFSET $${idx++}
+    `;
+
+    const total = Number((await pgPool.query(totalQ, params)).rows[0]?.c || 0);
+    const items = (await pgPool.query(listQ, [...params, limit, offset])).rows;
+
+    res.json({ pipeline, total, limit, offset, items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// =========================
+// Vulnerabilities
+// =========================
+app.get("/dashboard/vulns", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const offset = clampInt(req.query.offset, 0, 0, 100000);
+    const severity = String(req.query.severity || "").trim().toLowerCase(); // optional
+
+    const where = [`pr.pipeline_id = $1`];
+    const params = [pipeline];
+    let idx = 2;
+
+    if (severity) {
+      where.push(`LOWER(COALESCE(v.severity,'low')) = $${idx++}`);
+      params.push(severity);
+    }
+
+    const whereSql = `WHERE ${where.join(" AND ")}`;
+
+    const totalQ = `
+      SELECT COUNT(*)::int AS c
+      FROM vulnerabilities v
+      JOIN pipeline_runs pr ON pr.run_id::text = v.run_id::text
+      ${whereSql}
+    `;
+
+    const listQ = `
+      SELECT
+        v.run_id::text AS run_id,
+        v.rule_id,
+        v.title,
+        v.severity,
+        v.confidence,
+        v.evidence,
+        v.detected_at
+      FROM vulnerabilities v
+      JOIN pipeline_runs pr ON pr.run_id::text = v.run_id::text
+      ${whereSql}
+      ORDER BY v.detected_at DESC
+      LIMIT $${idx++} OFFSET $${idx++}
+    `;
+
+    const total = Number((await pgPool.query(totalQ, params)).rows[0]?.c || 0);
+    const items = (await pgPool.query(listQ, [...params, limit, offset])).rows;
+
+    res.json({ pipeline, total, limit, offset, items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// =========================
+// Anomalies
+// =========================
+app.get("/dashboard/anomalies", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const offset = clampInt(req.query.offset, 0, 0, 100000);
+
+    const totalQ = `
+      SELECT COUNT(*)::int AS c
+      FROM anomaly_reports
+      WHERE pipeline_id = $1
+    `;
+    const listQ = `
+      SELECT
+        id,
+        ts,
+        pipeline_id,
+        run_id,
+        job_id,
+        model_used,
+        anomaly_score,
+        is_anomaly,
+        details
+      FROM anomaly_reports
+      WHERE pipeline_id = $1
+      ORDER BY ts DESC
+      LIMIT $2 OFFSET $3
+    `;
+
+    const total = Number((await pgPool.query(totalQ, [pipeline])).rows[0]?.c || 0);
+    const items = (await pgPool.query(listQ, [pipeline, limit, offset])).rows;
+
+    res.json({ pipeline, total, limit, offset, items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// =========================
+// Fixes
+// =========================
+app.get("/dashboard/fixes", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const offset = clampInt(req.query.offset, 0, 0, 100000);
+
+    const totalQ = `SELECT COUNT(*)::int AS c FROM fix_reports WHERE pipeline_id=$1`;
+    const listQ = `
+      SELECT
+        id,
+        pipeline_id,
+        run_id::text AS run_id,
+        rule_id,
+        title,
+        safe,
+        created_at,
+        yaml_patch,
+        patched_yaml_preview,
+        original_yaml
+      FROM fix_reports
+      WHERE pipeline_id=$1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+
+    const total = Number((await pgPool.query(totalQ, [pipeline])).rows[0]?.c || 0);
+    const items = (await pgPool.query(listQ, [pipeline, limit, offset])).rows;
+
+    res.json({ pipeline, total, limit, offset, items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// =========================
+// Patches
+// =========================
+app.get("/dashboard/patches", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const offset = clampInt(req.query.offset, 0, 0, 100000);
+
+    const totalQ = `SELECT COUNT(*)::int AS c FROM patch_applies WHERE pipeline_id=$1`;
+    const listQ = `
+      SELECT
+        id,
+        pipeline_id,
+        run_id::text AS run_id,
+        rule_id,
+        status,
+        created_at
+      FROM patch_applies
+      WHERE pipeline_id=$1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+
+    const total = Number((await pgPool.query(totalQ, [pipeline])).rows[0]?.c || 0);
+    const items = (await pgPool.query(listQ, [pipeline, limit, offset])).rows;
+
+    res.json({ pipeline, total, limit, offset, items });
+  } catch (e) {
+    next(e);
+  }
+});

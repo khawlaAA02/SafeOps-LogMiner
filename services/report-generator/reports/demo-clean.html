@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>SafeOps Report - demo-clean</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; padding: 16px; border-radius: 10px; margin-bottom: 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#f2f2f2; font-size:12px; }
+    .ok { background:#e7ffe7; }
+    .warn { background:#fff3cd; }
+    .bad { background:#ffe7e7; }
+    table { width:100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
+    th { background: #f7f7f7; text-align:left; }
+    code { background:#f6f6f6; padding:2px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+
+<h2>SafeOps-LogMiner — DevSecOps Security Report</h2>
+<div class="card">
+  <div><b>Pipeline:</b> demo-clean</div>
+  <div><b>Date:</b> 2025-12-27T06:35:50.721Z</div>
+  <div class="row" style="margin-top:10px;">
+    <span class="pill ok">
+      Score: 100/100
+    </span>
+    <span class="pill">Vulns: 0</span>
+    <span class="pill">Risk: 0</span>
+    <span class="pill">Anomalies: 0</span>
+    <span class="pill">Mode: all</span>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Résumé</h3>
+  <ul>
+    <li>Penalty vuln: <b>0</b></li>
+    <li>Penalty anomalies: <b>0</b></li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Vulnerabilities (table: <code>vulnerabilities</code>)</h3>
+    <p>Aucune vulnérabilité trouvée pour ce pipeline.</p>
+</div>
+
+<div class="card">
+  <h3>Fix Suggestions (table: <code>fix_reports</code>)</h3>
+    <p>Aucun fix lié à ce pipeline.</p>
+</div>
+
+<div class="card">
+  <h3>Anomalies (table: <code>anomaly_reports</code>)</h3>
+  <p>Nombre d'anomalies détectées (is_anomaly=true): <b>0</b></p>
+</div>
+
+<div class="card">
+  <h3>Patches (table: <code>patch_applies</code>)</h3>
+    <p>Aucun patch (ou simulation) enregistré pour ce pipeline.</p>
+</div>
+
+</body>
+</html>

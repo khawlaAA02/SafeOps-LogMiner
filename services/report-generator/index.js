@@ -12,57 +12,43 @@ const app = express();
 app.use(express.json({ limit: "2mb" }));
 
 // ---------------------------
-// Logs + crash safety
+// Crash safety
 // ---------------------------
-process.on("uncaughtException", (err) => {
-  console.error("🔥 uncaughtException:", err);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("🔥 unhandledRejection:", reason);
-});
+process.on("uncaughtException", (err) => console.error("🔥 uncaughtException:", err));
+process.on("unhandledRejection", (reason) => console.error("🔥 unhandledRejection:", reason));
 
 app.use((req, _res, next) => {
   console.log(`--> ${req.method} ${req.url}`);
   next();
 });
 
-// Wrapper Express v4 pour routes async
-const asyncHandler = (fn) => (req, res, next) =>
-  Promise.resolve(fn(req, res, next)).catch(next);
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 // ---------------------------
 // CORS
 // ---------------------------
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const EXTRA_ORIGINS = (process.env.CORS_EXTRA_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
+  .split(",").map((s) => s.trim()).filter(Boolean);
 const allowedOrigins = Array.from(new Set([CORS_ORIGIN, ...EXTRA_ORIGINS]));
 
-app.use(
-  cors({
-    origin: function (origin, cb) {
-      if (!origin) return cb(null, true); // curl/postman
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("CORS blocked: " + origin), false);
-    },
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors({
+  origin: function (origin, cb) {
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("CORS blocked: " + origin), false);
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 // ---------------------------
-// Paths / Files
+// Paths
 // ---------------------------
 const REPORTS_DIR = process.env.REPORTS_DIR || path.join(__dirname, "reports");
-const TPL_PATH =
-  process.env.TEMPLATE_PATH || path.join(__dirname, "templates", "report.hbs");
+const TPL_PATH = process.env.TEMPLATE_PATH || path.join(__dirname, "templates", "report.hbs");
 
-function ensureDir(p) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
+function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 ensureDir(REPORTS_DIR);
 
 function safePipelineId(input) {
@@ -76,7 +62,7 @@ function filePathFor(pipelineId, ext) {
 }
 
 // ---------------------------
-// PostgreSQL pool
+// DB
 // ---------------------------
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "postgres",
@@ -89,24 +75,217 @@ const pool = new Pool({
   connectionTimeoutMillis: Number(process.env.PG_CONN_TIMEOUT || 5000),
 });
 
-pool.on("error", (err) => {
-  console.error("PG Pool error:", err);
+pool.on("error", (err) => console.error("PG Pool error:", err));
+
+
+
+
+// =========================
+// Extra endpoints (plateforme)
+// =========================
+
+// GET /dashboard/runs?pipeline=ci-demo&limit=20&offset=0
+app.get("/dashboard/runs", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    const limit = Math.min(Number(req.query.limit || 20), 200);
+    const offset = Math.max(Number(req.query.offset || 0), 0);
+
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const r = await pgPool.query(
+      `
+      SELECT
+        created_at, ts, pipeline_id, run_id, job_id, source, status,
+        duration_sec, error_count, secrets_count, urls_count, bypass_count,
+        steps_count, severity_score
+      FROM pipeline_runs
+      WHERE pipeline_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+      `,
+      [pipeline, limit, offset]
+    );
+
+    const c = await pgPool.query(
+      `SELECT COUNT(*)::int AS n FROM pipeline_runs WHERE pipeline_id=$1`,
+      [pipeline]
+    );
+
+    res.json({ pipeline, limit, offset, total: c.rows[0].n, items: r.rows });
+  } catch (e) {
+    next(e);
+  }
 });
+
+// GET /dashboard/vulns?pipeline=ci-demo&limit=50&offset=0
+app.get("/dashboard/vulns", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    const limit = Math.min(Number(req.query.limit || 50), 200);
+    const offset = Math.max(Number(req.query.offset || 0), 0);
+
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const r = await pgPool.query(
+      `
+      SELECT
+        v.id,
+        v.run_id::text AS run_id,
+        v.rule_id,
+        v.title,
+        v.severity,
+        v.confidence,
+        v.evidence,
+        v.detected_at
+      FROM vulnerabilities v
+      WHERE v.run_id::text IN (
+        SELECT pr.run_id
+        FROM pipeline_runs pr
+        WHERE pr.pipeline_id = $1
+      )
+      ORDER BY v.detected_at DESC
+      LIMIT $2 OFFSET $3
+      `,
+      [pipeline, limit, offset]
+    );
+
+    const c = await pgPool.query(
+      `
+      SELECT COUNT(*)::int AS n
+      FROM vulnerabilities v
+      WHERE v.run_id::text IN (
+        SELECT pr.run_id
+        FROM pipeline_runs pr
+        WHERE pr.pipeline_id = $1
+      )
+      `,
+      [pipeline]
+    );
+
+    res.json({ pipeline, limit, offset, total: c.rows[0].n, items: r.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /dashboard/anomalies?pipeline=ci-demo&limit=50&offset=0
+app.get("/dashboard/anomalies", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    const limit = Math.min(Number(req.query.limit || 50), 200);
+    const offset = Math.max(Number(req.query.offset || 0), 0);
+
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const r = await pgPool.query(
+      `
+      SELECT
+        id, ts, pipeline_id, run_id, job_id,
+        model_used, anomaly_score, is_anomaly, details
+      FROM anomaly_reports
+      WHERE pipeline_id = $1
+      ORDER BY ts DESC
+      LIMIT $2 OFFSET $3
+      `,
+      [pipeline, limit, offset]
+    );
+
+    const c = await pgPool.query(
+      `SELECT COUNT(*)::int AS n FROM anomaly_reports WHERE pipeline_id=$1`,
+      [pipeline]
+    );
+
+    res.json({ pipeline, limit, offset, total: c.rows[0].n, items: r.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /dashboard/fixes?pipeline=ci-demo&limit=50&offset=0
+app.get("/dashboard/fixes", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    const limit = Math.min(Number(req.query.limit || 50), 200);
+    const offset = Math.max(Number(req.query.offset || 0), 0);
+
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const r = await pgPool.query(
+      `
+      SELECT
+        id, pipeline_id, run_id::text AS run_id,
+        rule_id, title, safe, created_at,
+        yaml_patch, patched_yaml_preview, original_yaml
+      FROM fix_reports
+      WHERE pipeline_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+      `,
+      [pipeline, limit, offset]
+    );
+
+    const c = await pgPool.query(
+      `SELECT COUNT(*)::int AS n FROM fix_reports WHERE pipeline_id=$1`,
+      [pipeline]
+    );
+
+    res.json({ pipeline, limit, offset, total: c.rows[0].n, items: r.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /dashboard/patches?pipeline=ci-demo&limit=50&offset=0
+app.get("/dashboard/patches", async (req, res, next) => {
+  try {
+    const pipeline = String(req.query.pipeline || "").trim();
+    const limit = Math.min(Number(req.query.limit || 50), 200);
+    const offset = Math.max(Number(req.query.offset || 0), 0);
+
+    if (!pipeline) return res.status(400).json({ error: "pipeline is required" });
+
+    const r = await pgPool.query(
+      `
+      SELECT
+        id, pipeline_id, run_id::text AS run_id,
+        rule_id, status, created_at
+      FROM patch_applies
+      WHERE pipeline_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+      `,
+      [pipeline, limit, offset]
+    );
+
+    const c = await pgPool.query(
+      `SELECT COUNT(*)::int AS n FROM patch_applies WHERE pipeline_id=$1`,
+      [pipeline]
+    );
+
+    res.json({ pipeline, limit, offset, total: c.rows[0].n, items: r.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+
+// ---------------------------
+// Handlebars helpers (IMPORTANT)
+// ---------------------------
+Handlebars.registerHelper("gte", (a, b) => Number(a) >= Number(b));
+Handlebars.registerHelper("lte", (a, b) => Number(a) <= Number(b));
+Handlebars.registerHelper("eq", (a, b) => String(a) === String(b));
+Handlebars.registerHelper("json", (obj) => JSON.stringify(obj, null, 2));
+Handlebars.registerHelper("upper", (v) => String(v ?? "").toUpperCase());
+Handlebars.registerHelper("lower", (v) => String(v ?? "").toLowerCase());
+Handlebars.registerHelper("default", (v, def) => (v === null || v === undefined || v === "") ? def : v);
+Handlebars.registerHelper("upper", (s) => String(s ?? "").toUpperCase());
+
 
 // ---------------------------
 // Utils
 // ---------------------------
-function parseFindings(row) {
-  if (!row) return [];
-  const f = row.findings;
-  if (!f) return [];
-  if (Array.isArray(f)) return f;
-  try {
-    if (typeof f === "string") return JSON.parse(f);
-  } catch (_) {}
-  return [];
-}
-
 function severityWeight(sev) {
   const s = String(sev || "").toLowerCase();
   if (s === "critical") return 10;
@@ -116,16 +295,11 @@ function severityWeight(sev) {
   return 1;
 }
 
-function computeScore(vulnRows, anomalyCount) {
+function computeScore(vulns, anomalyCount) {
   let totalRisk = 0;
-  let totalFindings = 0;
+  for (const v of vulns) totalRisk += severityWeight(v.severity);
 
-  for (const r of vulnRows) {
-    const findings = parseFindings(r);
-    totalFindings += findings.length;
-    for (const f of findings) totalRisk += severityWeight(f.severity);
-  }
-
+  const vulnsCount = vulns.length;
   const anomalyPenalty = Math.min(30, Number(anomalyCount || 0) * 2);
   const vulnPenalty = Math.min(80, totalRisk * 2);
 
@@ -134,12 +308,11 @@ function computeScore(vulnRows, anomalyCount) {
 
   return {
     score,
-    stats: { totalFindings, totalRisk, anomalyCount: Number(anomalyCount || 0) },
+    stats: { vulnsCount, totalRisk, anomalyCount: Number(anomalyCount || 0) },
     penalty: { vulnPenalty, anomalyPenalty },
   };
 }
 
-// ✅ Dédup SARIF par ruleId
 function dedupeSarifByRule(results) {
   const seen = new Set();
   const out = [];
@@ -153,57 +326,43 @@ function dedupeSarifByRule(results) {
   return out;
 }
 
-function toSarif(pipelineId, vulnRows) {
-  const results = [];
-
-  for (const r of vulnRows) {
-    const findings = parseFindings(r);
-    for (const f of findings) {
-      const sev = (f.severity || "low").toLowerCase();
-      const level =
-        sev === "critical" || sev === "high"
-          ? "error"
-          : sev === "medium"
-          ? "warning"
-          : "note";
-
-      const msg = `${f.title || "Finding"} - ${f.description || ""}`.trim();
-
-      results.push({
-        ruleId: f.rule_id || "SAFEOPS_RULE",
-        level,
-        message: { text: msg },
-        properties: {
-          pipeline: pipelineId,
-          mapping: f.mapping || {},
-          recommendation: f.recommendation || "",
-          evidence: f.evidence || null,
-        },
-      });
-    }
-  }
+function toSarif(pipelineId, vulns) {
+  const results = vulns.map((v) => {
+    const sev = (v.severity || "low").toLowerCase();
+    const level = (sev === "critical" || sev === "high") ? "error" : (sev === "medium") ? "warning" : "note";
+    return {
+      ruleId: v.rule_id || "SAFEOPS_RULE",
+      level,
+      message: { text: `${v.title || v.rule_id || "Finding"}` },
+      properties: {
+        pipeline: pipelineId,
+        run_id: v.run_id,
+        evidence: v.evidence || null,
+        confidence: v.confidence ?? null,
+      },
+    };
+  });
 
   return {
     $schema: "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
-    runs: [
-      {
-        tool: {
-          driver: {
-            name: "SafeOps-LogMiner",
-            informationUri: "https://example.local/safeops",
-          },
-        },
-        results: dedupeSarifByRule(results),
-      },
-    ],
+    runs: [{
+      tool: { driver: { name: "SafeOps-LogMiner", informationUri: "https://example.local/safeops" } },
+      results: dedupeSarifByRule(results),
+    }],
   };
 }
 
-function renderPdf({ pipelineId, scoreObj, vulns, fixes, anomalyCount }, outPath) {
+// ✅ PDF robuste: écoute aussi doc.on("error")
+function renderPdf({ pipelineId, scoreObj, vulns, fixes, anomalyCount, patches }, outPath) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 });
     const stream = fs.createWriteStream(outPath);
+
+    doc.on("error", reject);
+    stream.on("error", reject);
+    stream.on("finish", resolve);
+
     doc.pipe(stream);
 
     doc.fontSize(18).text("SafeOps-LogMiner — DevSecOps Security Report");
@@ -214,68 +373,53 @@ function renderPdf({ pipelineId, scoreObj, vulns, fixes, anomalyCount }, outPath
 
     doc.fontSize(16).text(`Security Score: ${scoreObj.score}/100`);
     doc.fontSize(10).text(
-      `Findings: ${scoreObj.stats.totalFindings} | TotalRisk: ${scoreObj.stats.totalRisk} | Anomalies: ${anomalyCount}`
+      `Vulns: ${scoreObj.stats.vulnsCount} | Risk: ${scoreObj.stats.totalRisk} | Anomalies: ${anomalyCount}`
     );
     doc.moveDown();
 
-    doc.fontSize(14).text("Vulnerabilities (VulnDetector)", { underline: true });
+    doc.fontSize(14).text("Vulnerabilities", { underline: true });
     doc.moveDown(0.3);
-
     if (!vulns.length) {
-      doc.fontSize(11).text("No vulnerability reports found for this pipeline.");
+      doc.fontSize(11).text("Aucune vulnérabilité trouvée pour ce pipeline.");
     } else {
-      const maxReports = Math.min(10, vulns.length);
-      for (let i = 0; i < maxReports; i++) {
-        const vr = vulns[i];
-        doc.fontSize(11).text(
-          `Report #${vr.id} — status=${vr.status || "unknown"} — ${vr.created_at}`
-        );
-
-        const findings = parseFindings(vr);
-        if (!findings.length) {
-          doc.text("  - No findings in this report.");
-        } else {
-          for (const f of findings) {
-            doc.text(
-              `  - [${(f.severity || "low").toUpperCase()}] ${f.title || f.rule_id || "Finding"}`
-            );
-            if (f.description) doc.text(`      desc: ${f.description}`);
-            if (f.recommendation) doc.text(`      fix: ${f.recommendation}`);
-          }
-        }
-        doc.moveDown(0.5);
+      for (const v of vulns.slice(0, 15)) {
+        doc.fontSize(11).text(`- [${String(v.severity || "medium").toUpperCase()}] ${v.title || v.rule_id}`);
+        doc.fontSize(9).text(`  rule_id=${v.rule_id} | run_id=${v.run_id} | ${v.detected_at}`);
       }
     }
 
     doc.addPage();
-    doc.fontSize(14).text("Fix Suggestions (FixSuggester)", { underline: true });
+    doc.fontSize(14).text("Fix Suggestions", { underline: true });
     doc.moveDown(0.3);
-
     if (!fixes.length) {
-      doc.fontSize(11).text("No fixes found (yet).");
+      doc.fontSize(11).text("Aucun fix trouvé.");
     } else {
-      const max = Math.min(10, fixes.length);
-      doc.fontSize(11).text(`Showing latest ${max} fixes.`);
-      doc.moveDown(0.3);
-      for (let i = 0; i < max; i++) {
-        const fr = fixes[i];
-        doc.text(`- ${fr.rule_id || "FIX"} — ${fr.title || ""} — ${fr.created_at}`);
+      for (const f of fixes.slice(0, 10)) {
+        doc.fontSize(11).text(`- ${f.rule_id || "FIX"} | run_id=${f.run_id} | safe=${f.safe} | ${f.created_at}`);
       }
     }
 
     doc.moveDown();
-    doc.fontSize(14).text("Behavioral Anomalies (AnomalyDetector)", { underline: true });
+    doc.fontSize(14).text("Patches", { underline: true });
     doc.moveDown(0.3);
-    doc.fontSize(11).text(`Anomalies detected for pipeline "${pipelineId}": ${anomalyCount}`);
+    if (!patches.length) doc.fontSize(11).text("Aucun patch appliqué.");
+    else {
+      for (const p of patches.slice(0, 10)) {
+        doc.fontSize(11).text(`- ${p.rule_id || "PATCH"} | run_id=${p.run_id} | status=${p.status} | ${p.created_at}`);
+      }
+    }
+
+    doc.moveDown();
+    doc.fontSize(14).text("Behavioral Anomalies", { underline: true });
+    doc.moveDown(0.3);
+    doc.fontSize(11).text(`Nombre d'anomalies (is_anomaly=true): ${anomalyCount}`);
 
     doc.end();
-    stream.on("finish", resolve);
-    stream.on("error", reject);
   });
 }
 
 // ---------------------------
-// Template cache (évite relire le fichier à chaque call)
+// Template cache
 // ---------------------------
 let compiledTemplate = null;
 function getTemplate() {
@@ -286,53 +430,109 @@ function getTemplate() {
 }
 
 // ---------------------------
-// Génération report (factorisée)
+// Queries adaptées à TES tables
+// ---------------------------
+
+const UUID_REGEX_SQL = "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+
+async function fetchPipelines() {
+  const q = `
+    SELECT pipeline_id AS pipeline, COUNT(*)::int AS runs
+    FROM pipeline_runs
+    GROUP BY pipeline_id
+    ORDER BY runs DESC
+    LIMIT 200;
+  `;
+  return (await pool.query(q)).rows;
+}
+
+async function fetchVulnerabilitiesForPipeline(pipelineId, limit = 200) {
+  // ✅ On ne cast jamais text -> uuid
+  // ✅ On relie via run_id UUID seulement
+  const q = `
+    SELECT
+      v.run_id::text AS run_id,
+      v.rule_id,
+      v.title,
+      v.severity,
+      v.confidence,
+      v.evidence,
+      v.detected_at
+    FROM vulnerabilities v
+    WHERE v.run_id::text IN (
+      SELECT pr.run_id
+      FROM pipeline_runs pr
+      WHERE pr.pipeline_id = $1
+        AND pr.run_id ~* '${UUID_REGEX_SQL}'
+    )
+    ORDER BY v.detected_at DESC
+    LIMIT $2;
+  `;
+  return (await pool.query(q, [pipelineId, limit])).rows;
+}
+
+async function fetchFixesForPipeline(pipelineId, limit = 50) {
+  // Ton fix_reports contient au moins: id, pipeline_id, run_id, safe, created_at
+  // Certaines versions contiennent aussi rule_id/title => on met COALESCE si présent
+  const q = `
+    SELECT
+      id,
+      pipeline_id,
+      run_id,
+      COALESCE(rule_id, 'FIX') AS rule_id,
+      COALESCE(title, '') AS title,
+      safe,
+      created_at
+    FROM fix_reports
+    WHERE pipeline_id = $1
+    ORDER BY created_at DESC
+    LIMIT $2;
+  `;
+  return (await pool.query(q, [pipelineId, limit])).rows;
+}
+
+async function fetchPatchesForPipeline(pipelineId, limit = 50) {
+  const q = `
+    SELECT id, run_id::text AS run_id, rule_id, status, created_at
+    FROM patch_applies
+    WHERE pipeline_id = $1
+    ORDER BY created_at DESC
+    LIMIT $2;
+  `;
+  return (await pool.query(q, [pipelineId, limit])).rows;
+}
+
+async function fetchAnomalyCount(pipelineId) {
+  const q = `
+    SELECT COUNT(*)::int AS c
+    FROM anomaly_reports
+    WHERE pipeline_id = $1 AND is_anomaly = true;
+  `;
+  return Number((await pool.query(q, [pipelineId])).rows[0]?.c || 0);
+}
+
+// ---------------------------
+// Génération report
 // ---------------------------
 async function generateReport(pipelineId, mode = "all") {
-  const limit = mode === "latest" ? 1 : 50;
-
-  const vulnRows = (
-    await pool.query(
-      `SELECT id, pipeline, run_id, source, status, findings, created_at
-       FROM vuln_reports
-       WHERE pipeline=$1
-       ORDER BY created_at DESC
-       LIMIT $2`,
-      [pipelineId, limit]
-    )
-  ).rows;
-
-  const fixRows = (
-    await pool.query(
-      `SELECT id, rule_id, title, yaml_patch, created_at
-       FROM fix_reports
-       ORDER BY created_at DESC
-       LIMIT 50`
-    )
-  ).rows;
-
-  const anomalyCount = Number(
-    (
-      await pool.query(
-        `SELECT COUNT(*)::int AS c
-         FROM anomaly_reports
-         WHERE pipeline_id=$1 AND is_anomaly=true`,
-        [pipelineId]
-      )
-    ).rows[0]?.c || 0
-  );
-
-  const scoreObj = computeScore(vulnRows, anomalyCount);
-
   const template = getTemplate();
+
+  const vulns = await fetchVulnerabilitiesForPipeline(pipelineId, 200);
+  const fixes = await fetchFixesForPipeline(pipelineId, 50);
+  const patches = await fetchPatchesForPipeline(pipelineId, 50);
+  const anomalyCount = await fetchAnomalyCount(pipelineId);
+
+  const scoreObj = computeScore(vulns, anomalyCount);
+
   const html = template({
     pipeline: pipelineId,
     date: new Date().toISOString(),
     score: scoreObj.score,
     stats: scoreObj.stats,
     penalties: scoreObj.penalty,
-    vulns: vulnRows.map((v) => ({ ...v, findings: parseFindings(v) })),
-    fixes: fixRows,
+    vulns,
+    fixes,
+    patches,
     anomalies: anomalyCount,
     mode,
   });
@@ -342,32 +542,26 @@ async function generateReport(pipelineId, mode = "all") {
   const sarifPath = filePathFor(pipelineId, "sarif");
 
   fs.writeFileSync(htmlPath, html, "utf8");
-  await renderPdf({ pipelineId, scoreObj, vulns: vulnRows, fixes: fixRows, anomalyCount }, pdfPath);
+  await renderPdf({ pipelineId, scoreObj, vulns, fixes, patches, anomalyCount }, pdfPath);
 
-  const sarif = toSarif(pipelineId, vulnRows);
+  const sarif = toSarif(pipelineId, vulns);
   fs.writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), "utf8");
 
-  return { scoreObj, pdfPath, htmlPath, sarifPath, anomalyCount };
+  return { scoreObj, pdfPath, htmlPath, sarifPath };
 }
 
 // ---------------------------
 // Routes
 // ---------------------------
+app.get("/ping", (_req, res) => res.json({ pong: true }));
+
 app.get("/health", asyncHandler(async (_req, res) => {
   await pool.query("SELECT 1");
-  res.json({ status: "ok" });
+  res.json({ status: "ok", db: "ok" });
 }));
 
 app.get("/pipelines", asyncHandler(async (_req, res) => {
-  const rows = (
-    await pool.query(
-      `SELECT pipeline, COUNT(*)::int as reports
-       FROM vuln_reports
-       GROUP BY pipeline
-       ORDER BY reports DESC
-       LIMIT 200`
-    )
-  ).rows;
+  const rows = await fetchPipelines();
   res.json(rows);
 }));
 
@@ -393,7 +587,6 @@ app.get("/report/:pipelineId", asyncHandler(async (req, res) => {
   });
 }));
 
-// ✅ ZIP robuste (évite "Empty reply")
 app.get("/report/:pipelineId/zip", asyncHandler(async (req, res) => {
   const pipelineId = safePipelineId(req.params.pipelineId);
   if (!pipelineId) return res.status(400).json({ error: "Invalid pipelineId" });
@@ -406,17 +599,9 @@ app.get("/report/:pipelineId/zip", asyncHandler(async (req, res) => {
   res.setHeader("Content-Disposition", `attachment; filename="${pipelineId}-${mode}.zip"`);
 
   const archive = archiver("zip", { zlib: { level: 9 } });
+  res.on("close", () => { try { archive.abort(); } catch (_) {} });
 
-  // Si le client coupe la connexion => stop archiver
-  res.on("close", () => {
-    try { archive.abort(); } catch (_) {}
-  });
-
-  archive.on("warning", (err) => {
-    // warning non bloquant
-    console.warn("ZIP warning:", err);
-  });
-
+  archive.on("warning", (err) => console.warn("ZIP warning:", err));
   archive.on("error", (err) => {
     console.error("ZIP error:", err);
     if (!res.headersSent) res.status(500);
@@ -424,12 +609,10 @@ app.get("/report/:pipelineId/zip", asyncHandler(async (req, res) => {
   });
 
   archive.pipe(res);
-
   archive.file(htmlPath, { name: `${pipelineId}.html` });
   archive.file(pdfPath, { name: `${pipelineId}.pdf` });
   archive.file(sarifPath, { name: `${pipelineId}.sarif` });
-
-  archive.finalize(); // pas de await
+  archive.finalize();
 }));
 
 app.get("/report/:pipelineId/pdf", (req, res) => {
@@ -461,12 +644,11 @@ app.get("/report/:pipelineId/sarif", (req, res) => {
   res.send(fs.readFileSync(p, "utf8"));
 });
 
-// Handler global (doit être tout en bas)
+// Global error handler
 app.use((err, _req, res, _next) => {
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "Internal error", detail: String(err.message || err) });
 });
 
-// Start
 const port = Number(process.env.PORT || 3006);
 app.listen(port, () => console.log(`ReportGenerator running on ${port}`));

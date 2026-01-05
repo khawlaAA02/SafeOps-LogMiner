@@ -1,0 +1,5 @@
+pipeline_id,run_id,y_true,y_pred,score,model_used,ts
+demo-errors,UUID_A,1,0,0,NA,
+demo-errors,UUID_B,1,0,0,NA,
+demo-errors,UUID_C,0,0,0,NA,
+demo-errors,UUID_D,0,0,0,NA,

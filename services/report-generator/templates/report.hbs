@@ -1,63 +1,143 @@
 <!doctype html>
-<html>
+<html lang="fr">
 <head>
   <meta charset="utf-8" />
   <title>SafeOps Report - {{pipeline}}</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 24px; }
-    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
-    .sev-critical { color: #b00020; font-weight: 700; }
-    .sev-high { color: #c25a00; font-weight: 700; }
-    .sev-medium { color: #8a6d00; font-weight: 700; }
-    .sev-low { color: #2a6b2a; font-weight: 700; }
-    code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+    .card { border: 1px solid #ddd; padding: 16px; border-radius: 10px; margin-bottom: 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#f2f2f2; font-size:12px; }
+    .ok { background:#e7ffe7; }
+    .warn { background:#fff3cd; }
+    .bad { background:#ffe7e7; }
+    table { width:100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
+    th { background: #f7f7f7; text-align:left; }
+    code { background:#f6f6f6; padding:2px 6px; border-radius:6px; }
   </style>
 </head>
 <body>
-  <h1>SafeOps-LogMiner — Security Report</h1>
-  <div class="card">
-    <div><b>Pipeline:</b> {{pipeline}}</div>
-    <div><b>Date:</b> {{date}}</div>
-    <div><b>Security score:</b> {{score}}/100</div>
-    <div><b>Findings:</b> {{stats.totalFindings}} | <b>Anomalies:</b> {{anomalies}}</div>
+
+<h2>SafeOps-LogMiner — DevSecOps Security Report</h2>
+<div class="card">
+  <div><b>Pipeline:</b> {{pipeline}}</div>
+  <div><b>Date:</b> {{date}}</div>
+  <div class="row" style="margin-top:10px;">
+    <span class="pill {{#if (gte score 80)}}ok{{else if (gte score 50)}}warn{{else}}bad{{/if}}">
+      Score: {{score}}/100
+    </span>
+    <span class="pill">Vulns: {{stats.vulnsCount}}</span>
+    <span class="pill">Risk: {{stats.totalRisk}}</span>
+    <span class="pill">Anomalies: {{stats.anomalyCount}}</span>
+    <span class="pill">Mode: {{mode}}</span>
   </div>
+</div>
 
-  <h2>Vulnerabilities</h2>
+<div class="card">
+  <h3>Résumé</h3>
+  <ul>
+    <li>Penalty vuln: <b>{{penalties.vulnPenalty}}</b></li>
+    <li>Penalty anomalies: <b>{{penalties.anomalyPenalty}}</b></li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Vulnerabilities (table: <code>vulnerabilities</code>)</h3>
   {{#if vulns.length}}
-    {{#each vulns}}
-      <div class="card">
-        <div><b>Report #{{id}}</b> — status: {{status}} — {{created_at}}</div>
-        {{#if findings.length}}
-          <ul>
-            {{#each findings}}
-              <li>
-                <span class="sev-{{severity}}">[{{severity}}]</span>
-                <b>{{title}}</b> — {{description}}<br/>
-                <i>Recommendation:</i> {{recommendation}}
-              </li>
-            {{/each}}
-          </ul>
-        {{else}}
-          <i>No findings.</i>
-        {{/if}}
-      </div>
-    {{/each}}
+    <table>
+      <thead>
+        <tr>
+          <th>run_id</th>
+          <th>rule_id</th>
+          <th>title</th>
+          <th>severity</th>
+          <th>detected_at</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each vulns}}
+          <tr>
+            <td>{{this.run_id}}</td>
+            <td>{{this.rule_id}}</td>
+            <td>{{this.title}}</td>
+            <td>{{upper this.severity}}</td>
+            <td>{{this.detected_at}}</td>
+          </tr>
+        {{/each}}
+      </tbody>
+    </table>
   {{else}}
-    <p>No vulnerability reports found.</p>
+    <p>Aucune vulnérabilité trouvée pour ce pipeline.</p>
   {{/if}}
+</div>
 
-  <h2>Fix suggestions (latest)</h2>
+<div class="card">
+  <h3>Fix Suggestions (table: <code>fix_reports</code>)</h3>
   {{#if fixes.length}}
-    <ul>
-      {{#each fixes}}
-        <li><b>{{rule_id}}</b> — {{title}} — {{created_at}}</li>
-      {{/each}}
-    </ul>
+    <table>
+      <thead>
+        <tr>
+          <th>id</th>
+          <th>run_id</th>
+          <th>rule_id</th>
+          <th>title</th>
+          <th>safe</th>
+          <th>created_at</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each fixes}}
+          <tr>
+            <td>{{this.id}}</td>
+            <td>{{this.run_id}}</td>
+            <td>{{this.rule_id}}</td>
+            <td>{{this.title}}</td>
+            <td>{{this.safe}}</td>
+            <td>{{this.created_at}}</td>
+          </tr>
+        {{/each}}
+      </tbody>
+    </table>
   {{else}}
-    <p>No fixes.</p>
+    <p>Aucun fix lié à ce pipeline.</p>
   {{/if}}
+</div>
 
-  <h2>Anomalies</h2>
-  <p>Anomalies detected: <b>{{anomalies}}</b></p>
+<div class="card">
+  <h3>Anomalies (table: <code>anomaly_reports</code>)</h3>
+  <p>Nombre d'anomalies détectées (is_anomaly=true): <b>{{anomalies}}</b></p>
+</div>
+
+<div class="card">
+  <h3>Patches (table: <code>patch_applies</code>)</h3>
+  {{#if patches.length}}
+    <table>
+      <thead>
+        <tr>
+          <th>id</th>
+          <th>run_id</th>
+          <th>rule_id</th>
+          <th>status</th>
+          <th>created_at</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each patches}}
+          <tr>
+            <td>{{this.id}}</td>
+            <td>{{this.run_id}}</td>
+            <td>{{this.rule_id}}</td>
+            <td>{{this.status}}</td>
+            <td>{{this.created_at}}</td>
+          </tr>
+        {{/each}}
+      </tbody>
+    </table>
+  {{else}}
+    <p>Aucun patch (ou simulation) enregistré pour ce pipeline.</p>
+  {{/if}}
+</div>
+
 </body>
 </html>

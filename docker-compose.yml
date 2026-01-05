@@ -1,264 +1,299 @@
-name: safeops-logminer
-
-networks:
-  safeops-net:
-    driver: bridge
-
-x-logging: &default-logging
-  driver: "json-file"
-  options:
-    max-size: "10m"
-    max-file: "3"
-
 services:
-  # ========================
+
+  # =========================
+  # PostgreSQL
+  # =========================
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: safeops-postgres
+    environment:
+      POSTGRES_USER: safeops
+      POSTGRES_PASSWORD: safeops
+      POSTGRES_DB: safeops_security
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - safeops
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safeops -d safeops_security"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # =========================
   # MongoDB
-  # ========================
+  # =========================
   mongo:
-    image: mongo:7
+    image: mongo:6
     container_name: safeops-mongo
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - mongodata:/data/db
     networks:
-      - safeops-net
+      - safeops
     restart: unless-stopped
-    logging: *default-logging
     healthcheck:
-      test:
-        [
-          "CMD",
-          "mongosh",
-          "--quiet",
-          "mongodb://localhost:27017/admin",
-          "--eval",
-          "db.runCommand({ ping: 1 }).ok"
-        ]
-      interval: 10s
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' || exit 1"]
+      interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 10s
+      retries: 20
 
-  # ========================
-  # PostgreSQL (Timescale)
-  # ========================
-  postgres:
-    image: timescale/timescaledb:latest-pg15
-    container_name: safeops-postgres
-    command:
-      - postgres
-      - -c
-      - shared_preload_libraries=timescaledb
+  # =========================
+  # Log Collector
+  # =========================
+  log-collector:
+    build:
+      context: ./services/log-collector
+    container_name: log-collector
+    env_file:
+      - ./.env
+    ports:
+      - "3001:3001"
     environment:
+      PORT: 3001
+      JSON_LIMIT: 2mb
+      RATE_LIMIT_PER_MIN: 60
+      INGEST_API_KEY: ${INGEST_API_KEY}
+
+      MONGO_URI: mongodb://mongo:27017/safeops_logs
+
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: safeops
+      DB_PASSWORD: safeops
+      DB_NAME: safeops_security
+
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      GITLAB_TOKEN: ${GITLAB_TOKEN}
+      GITLAB_BASE_URL: ${GITLAB_BASE_URL:-https://gitlab.com}
+      JENKINS_BASE_URL: ${JENKINS_BASE_URL}
+      JENKINS_USER: ${JENKINS_USER}
+      JENKINS_API_TOKEN: ${JENKINS_API_TOKEN}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    networks:
+      - safeops
+    restart: unless-stopped
+
+  # =========================
+  # Log Parser
+  # =========================
+  log-parser:
+    build:
+      context: ./services/log-parser
+    container_name: log-parser
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: safeops
+      POSTGRES_PASSWORD: safeops
+      POSTGRES_DB: safeops_security
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - safeops
+    restart: unless-stopped
+  # =========================
+  # Vulnerability Detector
+  # =========================
+  vuln-detector:
+    build:
+      context: ./services/vuln-detector
+    container_name: vuln-detector
+    ports:
+      - "3003:3003"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: safeops
+      POSTGRES_PASSWORD: safeops
+      POSTGRES_DB: safeops_security
+      RULES_FILE: /app/rules.yaml
+    volumes:
+      - ./services/vuln-detector/rules.yaml:/app/rules.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - safeops
+    restart: unless-stopped
+
+  # =========================
+  # Fix Suggester
+  # =========================
+  fix-suggester:
+    build:
+      context: ./services/fix-suggester
+    container_name: fix-suggester
+    ports:
+      - "3004:3004"
+    environment:
+      PORT: 3004
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: safeops
+      POSTGRES_PASSWORD: safeops
+      POSTGRES_DB: safeops_security
+      FIX_RULES_FILE: /app/rules_fixes.yaml
+    volumes:
+      - ./services/fix-suggester/rules_fixes.yaml:/app/rules_fixes.yaml:ro
+    command: uvicorn main:app --host 0.0.0.0 --port 3004
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - safeops
+    restart: unless-stopped
+
+
+  # =========================
+  # Machine Learning Service
+  # =========================
+  ml-service:
+    build:
+      context: ./services/ml-service
+    container_name: ml-service
+    ports:
+      - "3007:3007"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
       POSTGRES_DB: safeops_security
       POSTGRES_USER: safeops
       POSTGRES_PASSWORD: safeops
-    ports:
-      - "5433:5432"
+      MODEL_DIR: /app/models
+      MODEL_VERSION: v1
     volumes:
-      - pg_data:/var/lib/postgresql/data
-    networks:
-      - safeops-net
-    restart: unless-stopped
-    logging: *default-logging
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U safeops -d safeops_security -h localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
-  # ========================
-  # Migrator (one-shot)
-  # ========================
-  migrator:
-    image: postgres:15
-    container_name: safeops-migrator
+      - ./services/ml-service/models:/app/models
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ./db/migrations:/migrations:ro
-    environment:
-      PGPASSWORD: safeops
     networks:
-      - safeops-net
-    restart: "no"
-    logging: *default-logging
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      set -e;
-      echo "Migrator started";
-      ls -la /migrations;
-      for f in /migrations/*.sql; do
-        echo "Running $$f";
-        psql -h postgres -U safeops -d safeops_security -f "$$f";
-      done;
-      echo "Migrations OK";
-
-  # ========================
-  # Microservices
-  # ========================
-  log-collector:
-    build: ./services/log-collector
-    container_name: safeops-log-collector
-    ports:
-      - "3001:3001"
-    env_file:
-      - ./services/log-collector/.env
-    networks:
-      - safeops-net
+      - safeops
     restart: unless-stopped
-    init: true
-    logging: *default-logging
-    depends_on:
-      mongo:
-        condition: service_healthy
 
-  log-parser:
-    build: ./services/log-parser
-    container_name: safeops-log-parser
-    ports:
-      - "3002:3002"
-    env_file:
-      - ./services/log-parser/.env
-    networks:
-      - safeops-net
-    restart: unless-stopped
-    init: true
-    logging: *default-logging
-    depends_on:
-      mongo:
-        condition: service_healthy
-      log-collector:
-        condition: service_started
-
-  vuln-detector:
-    build: ./services/vuln-detector
-    container_name: safeops-vuln-detector
-    ports:
-      - "3003:3003"
-    env_file:
-      - ./services/vuln-detector/.env
-    networks:
-      - safeops-net
-    restart: unless-stopped
-    init: true
-    logging: *default-logging
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
-      log-parser:
-        condition: service_started
-
-  fix-suggester:
-    build: ./services/fix-suggester
-    container_name: safeops-fix-suggester
-    ports:
-      - "3004:3004"
-    env_file:
-      - ./services/fix-suggester/.env
-    networks:
-      - safeops-net
-    restart: unless-stopped
-    init: true
-    logging: *default-logging
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
-      vuln-detector:
-        condition: service_started
-
+  # =========================
+  # Anomaly Detector
+  # =========================
   anomaly-detector:
-    build: ./services/anomaly-detector
-    container_name: safeops-anomaly-detector
-    ports:
-      - "3005:3005"
+    build:
+      context: ./services/anomaly-detector
+    container_name: anomaly-detector
     env_file:
       - ./services/anomaly-detector/.env
+    ports:
+      - "3005:3005"
     environment:
-      TF_CPP_MIN_LOG_LEVEL: "2"
-    networks:
-      - safeops-net
-    restart: unless-stopped
-    init: true
-    logging: *default-logging
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: safeops
+      POSTGRES_PASSWORD: safeops
+      POSTGRES_DB: safeops_security
     depends_on:
       postgres:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
-      vuln-detector:
-        condition: service_started
+    networks:
+      - safeops
+    restart: unless-stopped
 
+  # =========================
+  # Report Generator
+  # =========================
   report-generator:
-    build: ./services/report-generator
-    container_name: safeops-report-generator
+    build:
+      context: ./services/report-generator
+    container_name: report-generator
     ports:
       - "3006:3006"
-    env_file:
-      - ./services/report-generator/.env
+    environment:
+      PORT: 3006
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: safeops
+      POSTGRES_PASSWORD: safeops
+      POSTGRES_DB: safeops_security
+      REPORTS_DIR: /app/reports
+      TEMPLATE_PATH: /app/templates/report.hbs
+      CORS_ORIGIN: http://localhost:5173
     volumes:
-      - ./reports:/app/reports
-    networks:
-      - safeops-net
-    restart: unless-stopped
-    init: true
-    logging: *default-logging
+      - ./services/report-generator/reports:/app/reports
+      - ./services/report-generator/templates:/app/templates
     depends_on:
       postgres:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
-      vuln-detector:
-        condition: service_started
+    networks:
+      - safeops
+    restart: unless-stopped
 
-  # ========================
-  # Dashboard API (MS7)
-  # ========================
+  # =========================
+  # Dashboard API
+  # =========================
   dashboard-api:
-    build: ./services/dashboard-api
-    container_name: safeops-dashboard-api
+    build:
+      context: ./services/dashboard-api
+    container_name: dashboard-api
     ports:
       - "3010:3010"
-    env_file:
-      - ./services/dashboard-api/.env
     environment:
-      CORS_ORIGIN: "http://localhost:5173,http://localhost:5174"
-    networks:
-      - safeops-net
-    restart: unless-stopped
-    init: true
-    logging: *default-logging
+      PORT: 3010
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: safeops_security
+      DB_USER: safeops
+      DB_PASSWORD: safeops
+      CORS_ORIGIN: "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
+      REPORT_BASE: "http://report-generator:3006"
+      REPORT_BASE_PUBLIC: "http://127.0.0.1:3006"
+
     depends_on:
       postgres:
         condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
-
-  # ========================
-  # Dashboard Web (Vite build → Nginx)
-  # ========================
-  dashboard-web:
-    build: ./services/dashboard-web
-    container_name: safeops-dashboard-web
-    ports:
-      - "5173:80"
+      report-generator:
+        condition: service_started
     networks:
-      - safeops-net
+      - safeops
     restart: unless-stopped
-    logging: *default-logging
+
+  # =========================
+  # Dashboard Web
+  # =========================
+  dashboard-web:
+    build:
+      context: ./dashboard-web
+      args:
+        VITE_API_BASE: "http://127.0.0.1:3010"
+        VITE_REPORT_BASE: "http://127.0.0.1:3006"
+    container_name: dashboard-web
+    ports:
+      - "5174:80"
     depends_on:
       dashboard-api:
         condition: service_started
       report-generator:
         condition: service_started
+    networks:
+      - safeops
+    restart: unless-stopped
+
+# =========================
+# Networks & Volumes
+# =========================
+networks:
+  safeops:
 
 volumes:
-  mongo_data:
-  pg_data:
+  pgdata:
+  mongodata:

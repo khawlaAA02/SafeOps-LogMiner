@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SafeOps-LogMiner",
+          "informationUri": "https://example.local/safeops"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "PIPELINE-FAIL",
+          "level": "warning",
+          "message": {
+            "text": "Pipeline failure indicators"
+          },
+          "properties": {
+            "pipeline": "pX",
+            "run_id": "87583d55-9c30-41cd-9803-23dbcabd8450",
+            "evidence": {
+              "rule": {
+                "id": "PIPELINE-FAIL",
+                "slsa": "SLSA-1 - Improve build reliability",
+                "owasp": "A09:2021 - Security Logging and Monitoring Failures"
+              },
+              "event": {
+                "ts": "2025-12-26 15:59:16.339945+00:00",
+                "line": "ERROR: build failed",
+                "value": "ERROR: build failed",
+                "line_no": 1,
+                "event_type": "error",
+                "event_severity": "high",
+                "parsed_event_id": 4
+              },
+              "description": "Generic errors that may indicate unstable pipeline or misconfiguration.",
+              "recommendation": "Fix build/test failures and add monitoring + alerting for recurring errors."
+            },
+            "confidence": 0.85
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
-fastapi
-uvicorn
-python-dotenv
-pyyaml
-psycopg2-binary
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+psycopg2-binary==2.9.9
+PyYAML==6.0.2

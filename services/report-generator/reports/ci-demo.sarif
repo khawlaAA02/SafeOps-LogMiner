@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SafeOps-LogMiner",
+          "informationUri": "https://example.local/safeops"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "SLSA-BYPASS",
+          "level": "error",
+          "message": {
+            "text": "Security checks bypass detected"
+          },
+          "properties": {
+            "pipeline": "ci-demo",
+            "run_id": "2cf92ae8-1dab-4df8-bf84-706e908576f4",
+            "evidence": {
+              "rule": {
+                "id": "SLSA-BYPASS",
+                "slsa": "SLSA-2 - Enforce policy checks",
+                "owasp": "A05:2021 - Security Misconfiguration"
+              },
+              "event": {
+                "ts": "2025-12-26 17:17:39.310867+00:00",
+                "line": "no-verify",
+                "value": null,
+                "line_no": 4,
+                "event_type": "bypass",
+                "event_severity": "high",
+                "parsed_event_id": 8
+              },
+              "description": "Detects bypass flags or disabling security checks in pipeline.",
+              "recommendation": "Block bypass flags, enforce branch protection, and require mandatory security checks."
+            },
+            "confidence": 0.9
+          }
+        },
+        {
+          "ruleId": "PIPELINE-FAIL",
+          "level": "warning",
+          "message": {
+            "text": "Pipeline failure indicators"
+          },
+          "properties": {
+            "pipeline": "ci-demo",
+            "run_id": "2cf92ae8-1dab-4df8-bf84-706e908576f4",
+            "evidence": {
+              "rule": {
+                "id": "PIPELINE-FAIL",
+                "slsa": "SLSA-1 - Improve build reliability",
+                "owasp": "A09:2021 - Security Logging and Monitoring Failures"
+              },
+              "event": {
+                "ts": "2025-12-26 17:17:39.310867+00:00",
+                "line": "FAILED",
+                "value": null,
+                "line_no": 3,
+                "event_type": "error",
+                "event_severity": "high",
+                "parsed_event_id": 7
+              },
+              "description": "Generic errors that may indicate unstable pipeline or misconfiguration.",
+              "recommendation": "Fix build/test failures and add monitoring + alerting for recurring errors."
+            },
+            "confidence": 0.85
+          }
+        }
+      ]
+    }
+  ]
+}

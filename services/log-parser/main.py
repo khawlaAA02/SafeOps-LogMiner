@@ -1,410 +1,242 @@
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
-from datetime import datetime
-from dotenv import load_dotenv
-from pymongo import MongoClient
-from jsonpath_ng import parse as jsonpath_parse
-from bson import ObjectId
-import yaml
-import re
 import os
-from typing import Union, Optional, Any, Dict, List
+import time
+import json
+import hashlib
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Tuple
+from uuid import UUID
 
-
-# ======================================================
-# 1) CONFIGURATION / ENV
-# ======================================================
+import psycopg2
+import psycopg2.extras
+from fastapi import FastAPI, HTTPException, Query, Path
+from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI")
+# =========================
+# CONFIG
+# =========================
+APP_VERSION = "1.2.1"
 PORT = int(os.getenv("PORT", "3002"))
-DB_NAME = os.getenv("DB_NAME", "safeops_logs")
 
-if not MONGO_URI:
-    raise RuntimeError("MONGO_URI is not set in .env")
+PG_HOST = os.getenv("POSTGRES_HOST", os.getenv("PG_HOST", "postgres"))
+PG_PORT = int(os.getenv("POSTGRES_PORT", os.getenv("PG_PORT", "5432")))
+PG_DB = os.getenv("POSTGRES_DB", os.getenv("PG_DB", "safeops_security"))
+PG_USER = os.getenv("POSTGRES_USER", os.getenv("PG_USER", "safeops"))
+PG_PASS = os.getenv("POSTGRES_PASSWORD", os.getenv("PG_PASS", "safeops"))
 
-client = MongoClient(MONGO_URI)
-db = client[DB_NAME]
-raw_logs_collection = db["raw_logs"]        # MS1
-parsed_logs_collection = db["parsed_logs"]  # MS2
+DEFAULT_LIMIT = 500
 
-app = FastAPI(title="LogParser", version="1.2.0")
+app = FastAPI(title="SafeOps Log Parser", version=APP_VERSION)
 
-
-# ======================================================
-# 2) REGEX / OUTILS D’EXTRACTION
-# ======================================================
-
-REGEX_PATTERNS = {
-    "error": re.compile(r"(error|failed|exception|traceback)", re.IGNORECASE),
-    "warning": re.compile(r"(warning|warn)", re.IGNORECASE),
-    "secret": re.compile(r"(AKIA[0-9A-Z]{16}|ghp_[0-9A-Za-z]{36})"),
-    "url": re.compile(r"https?://[^\s]+"),
-    "bypass": re.compile(r"(skip\s+checks|--no-verify|disable\s+security|bypass)", re.IGNORECASE),
-}
-
-STEP_LINE_PATTERNS = [
-    re.compile(r"^\s*##\[group\]\s*(.+)$", re.IGNORECASE),
-    re.compile(r"^\s*Step\s*\d+\s*:\s*(.+)$", re.IGNORECASE),
-    re.compile(r"^\s*Run\s+(.+)$", re.IGNORECASE),
-    re.compile(r"^\s*Executing\s+(.+)$", re.IGNORECASE),
-    re.compile(r"^\s*Job\s*:\s*(.+)$", re.IGNORECASE),
-]
+# =========================
+# REGEX RULES
+# =========================
+RE_ERROR = re.compile(r"\b(error|failed|exception|fatal)\b", re.IGNORECASE)
+RE_SECRET = re.compile(r"\b(token|secret|api[_-]?key|password)\b", re.IGNORECASE)
+RE_URL = re.compile(r"https?://\S+", re.IGNORECASE)
+RE_BYPASS = re.compile(r"\b(no-verify|bypass|skip)\b", re.IGNORECASE)
 
 
-def extract_regex_findings(text: Optional[str]) -> Dict[str, Any]:
-    """
-    Résumé compact (counts/lists) - utile pour score + dashboard.
-    """
-    if not text:
-        return {"errors": [], "warnings": [], "secrets": [], "urls": [], "bypass": [], "steps": []}
-
-    # steps (on garde juste les matches simples si besoin)
-    steps = []
-    for p in STEP_LINE_PATTERNS:
-        steps.extend(p.findall(text))
-
-    return {
-        "errors": REGEX_PATTERNS["error"].findall(text),
-        "warnings": REGEX_PATTERNS["warning"].findall(text),
-        "secrets": REGEX_PATTERNS["secret"].findall(text),
-        "urls": REGEX_PATTERNS["url"].findall(text),
-        "bypass": REGEX_PATTERNS["bypass"].findall(text),
-        "steps": steps,
-    }
+def now_utc():
+    return datetime.now(timezone.utc)
 
 
-def extract_semantic_events(text: str) -> List[Dict[str, Any]]:
-    """
-    Evénements sémantiques demandés par le prof:
-    - jobs/steps
-    - erreurs
-    - secrets
-    - URLs
-    - bypass
-    Chaque event contient la ligne + line_no => exploitable par VulnDetector.
-    """
-    if not text:
-        return []
+def sha256_text(s):
+    return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
 
-    events: List[Dict[str, Any]] = []
-    lines = text.splitlines()
 
-    for idx, line in enumerate(lines):
-        ln = idx + 1
-        stripped = line.strip()
-        if not stripped:
+def db_conn():
+    return psycopg2.connect(
+        host=PG_HOST,
+        port=PG_PORT,
+        dbname=PG_DB,
+        user=PG_USER,
+        password=PG_PASS,
+        connect_timeout=3,
+    )
+
+
+def wait_pg(max_tries=30):
+    for _ in range(max_tries):
+        try:
+            with db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            return
+        except:
+            time.sleep(1)
+    raise RuntimeError("Postgres not ready")
+
+
+# =========================
+# SCHEMA
+# =========================
+def ensure_schema():
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS parsed_events (
+                id BIGSERIAL PRIMARY KEY,
+                run_id UUID NOT NULL,
+                ts TIMESTAMPTZ NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                value_hash TEXT NOT NULL,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                line_no INTEGER
+            );
+            """)
+
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_parsed_events_run ON parsed_events(run_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_parsed_events_line ON parsed_events(run_id, line_no);")
+
+            # Dedup index (NO constraint)
+            cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_parsed_events_dedup
+            ON parsed_events (run_id, event_type, value_hash, ts);
+            """)
+
+        conn.commit()
+
+
+# =========================
+# PARSER
+# =========================
+def classify_line(line):
+    if RE_SECRET.search(line):
+        return "secret", "critical"
+    if RE_BYPASS.search(line):
+        return "bypass", "high"
+    if RE_ERROR.search(line):
+        return "error", "high"
+    if RE_URL.search(line):
+        return "url", "low"
+    return "info", "low"
+
+
+def parse_message_to_events(run_id, message, base_ts):
+    events = []
+    lines = (message or "").splitlines()
+
+    for i, raw in enumerate(lines, start=1):
+        line = raw.strip()
+        if not line:
             continue
 
-        # job/step
-        for p in STEP_LINE_PATTERNS:
-            m = p.search(line)
-            if m:
-                value = m.group(1).strip() if m.groups() else stripped
-                events.append({
-                    "type": "job_step",
-                    "value": value,
-                    "line": stripped,
-                    "line_no": ln
-                })
-                break
+        event_type, severity = classify_line(line)
+        value_hash = sha256_text(f"{event_type}|{line}")
 
-        # error line
-        if REGEX_PATTERNS["error"].search(line):
-            events.append({
-                "type": "error",
-                "value": stripped,
-                "line": stripped,
-                "line_no": ln
-            })
-
-        # bypass
-        if REGEX_PATTERNS["bypass"].search(line):
-            events.append({
-                "type": "bypass",
-                "value": stripped,
-                "line": stripped,
-                "line_no": ln
-            })
-
-        # secrets
-        for s in REGEX_PATTERNS["secret"].findall(line):
-            events.append({
-                "type": "secret",
-                "value": s,
-                "line": stripped,
-                "line_no": ln
-            })
-
-        # urls
-        for u in REGEX_PATTERNS["url"].findall(line):
-            events.append({
-                "type": "url",
-                "value": u,
-                "line": stripped,
-                "line_no": ln
-            })
+        events.append({
+            "run_id": str(run_id),
+            "ts": base_ts,
+            "event_type": event_type,
+            "severity": severity,
+            "value_hash": value_hash,
+            "payload": {
+                "line": line,
+                "line_no": i,
+                "event_type": event_type,
+                "severity": severity,
+            },
+            "line_no": i,
+        })
 
     return events
 
 
-def try_parse_yaml(raw_text: Optional[str]) -> Optional[dict]:
-    if not raw_text or not isinstance(raw_text, str):
-        return None
-    try:
-        data = yaml.safe_load(raw_text)
-        if isinstance(data, (dict, list)):
-            return data
-        return None
-    except Exception:
-        return None
+# =========================
+# RAW LOG FETCH
+# =========================
+def fetch_raw_logs(run_id, limit):
+    with db_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT ts, message
+                FROM raw_logs
+                WHERE run_id = %s::uuid
+                ORDER BY ts ASC
+                LIMIT %s
+            """, (str(run_id), limit))
+            return cur.fetchall()
 
 
-def extract_jsonpath(data: Optional[dict], path: str) -> Optional[List[Any]]:
-    if not data or not isinstance(data, dict):
-        return None
-    try:
-        expr = jsonpath_parse(path)
-        return [m.value for m in expr.find(data)]
-    except Exception:
-        return None
+# =========================
+# INSERT EVENTS (FIXED)
+# =========================
+def insert_parsed_events(events):
+    if not events:
+        return 0
+
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO parsed_events
+                  (run_id, ts, event_type, severity, value_hash, payload, line_no)
+                VALUES %s
+                ON CONFLICT DO NOTHING
+                """,
+                [
+                    (
+                        e["run_id"],
+                        e["ts"],
+                        e["event_type"],
+                        e["severity"],
+                        e["value_hash"],
+                        json.dumps(e["payload"]),
+                        e["line_no"],
+                    )
+                    for e in events
+                ],
+                page_size=1000,
+            )
+        conn.commit()
+
+        with conn.cursor() as cur2:
+            cur2.execute("SELECT COUNT(*) FROM parsed_events WHERE run_id=%s::uuid", (events[0]["run_id"],))
+            return cur2.fetchone()[0]
 
 
-def compute_severity(findings: Dict[str, Any]) -> Dict[str, Any]:
-    secrets = len(findings.get("secrets", []))
-    errors = len(findings.get("errors", []))
-    bypass = len(findings.get("bypass", []))
-    warnings = len(findings.get("warnings", []))
-    urls = len(findings.get("urls", []))
+# =========================
+# API
+# =========================
+@app.on_event("startup")
+def startup():
+    wait_pg()
+    ensure_schema()
 
-    score = 0
-    score += secrets * 50
-    score += bypass * 25
-    score += errors * 15
-    score += warnings * 5
-    score += min(urls, 5) * 2
-    score = min(score, 100)
-
-    if secrets > 0:
-        severity = "critical"
-    elif bypass > 0 or errors >= 2:
-        severity = "high"
-    elif errors == 1 or warnings >= 2:
-        severity = "medium"
-    else:
-        severity = "low"
-
-    return {"severity": severity, "score": score}
-
-
-# ======================================================
-# 3) NORMALISATION DES LOGS raw_logs (MS1)
-# ======================================================
-
-def normalize_raw_log(doc: dict) -> dict:
-    """
-    Supporte:
-    - format récent: {source,pipelineId,runId,raw,...}
-    - format ancien : {data:{...}, createdAt}
-    """
-    data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
-
-    raw_text = doc.get("raw")
-    if raw_text is None:
-        raw_text = data.get("raw") or data.get("log")
-
-    return {
-        "raw_log_id": str(doc.get("_id")),
-        "source": doc.get("source") or data.get("source") or "unknown",
-        "pipelineId": doc.get("pipelineId") or data.get("pipelineId") or "unknown",
-        "runId": doc.get("runId") or data.get("runId") or "unknown",
-        "repo": doc.get("repo") or data.get("repo") or data.get("repository"),
-        "branch": doc.get("branch") or data.get("branch"),
-        "jobId": doc.get("jobId") or data.get("jobId"),
-        "status": doc.get("status") or data.get("status"),
-        "raw_text": raw_text or "",
-        "createdAt_raw": doc.get("createdAt"),
-        "pulled": bool(doc.get("pulled", False)),
-    }
-
-
-# ======================================================
-# 4) SCHEMAS
-# ======================================================
-
-class LogInput(BaseModel):
-    pipeline: Optional[str] = None
-    status: Optional[str] = None
-    message: Optional[str] = None
-    raw: Union[dict, str, None] = None
-
-
-# ======================================================
-# 5) ENDPOINTS
-# ======================================================
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "log-parser", "version": APP_VERSION}
 
 
-@app.get("/")
-def root():
-    return {"message": "LogParser is running"}
-
-
-@app.post("/logs/parse")
-def parse_log(log: LogInput):
-    """
-    API demandée: POST /logs/parse
-    - regex
-    - parsing YAML
-    - jsonpath sur json
-    - stockage Mongo parsed_logs
-    """
+@app.post("/parse/postgres/run/{run_id}")
+def parse_run(run_id: UUID, limit: int = Query(DEFAULT_LIMIT, le=5000)):
     try:
-        # déterminer texte brut à analyser
-        raw_text = ""
-        yaml_data = None
-        important_fields = None
+        rows = fetch_raw_logs(run_id, limit)
+        if not rows:
+            return {"runId": str(run_id), "raw_logs": 0, "parsed": 0, "inserted": 0}
 
-        if isinstance(log.raw, str):
-            raw_text = log.raw
-            yaml_data = try_parse_yaml(raw_text)
+        all_events = []
+        for r in rows:
+            events = parse_message_to_events(run_id, r["message"], r["ts"])
+            all_events.extend(events)
 
-        elif isinstance(log.raw, dict):
-            # si raw json, on analyse message + on extrait champs via jsonpath
-            raw_text = log.message or ""
-            important_fields = {
-                "pipeline_name": extract_jsonpath(log.raw, "$.pipeline.name"),
-                "first_step": extract_jsonpath(log.raw, "$.steps[0].name"),
-            }
-
-        else:
-            raw_text = log.message or ""
-
-        findings = extract_regex_findings(raw_text)
-        events = extract_semantic_events(raw_text)
-        sev = compute_severity(findings)
-
-        parsed = {
-            "source": "manual",
-            "pipelineId": log.pipeline or "unknown",
-            "runId": "unknown",
-            "status": (log.status or "unknown"),
-            "message": log.message,
-
-            "events": events,                 # ✅ jobs/errors/secrets/urls/bypass
-            "regex_findings": findings,       # résumé
-            "severity": sev["severity"],
-            "severity_score": sev["score"],
-
-            "yaml": yaml_data,
-            "important_fields": important_fields,
-
-            "createdAt": datetime.utcnow(),
-        }
-
-        result = parsed_logs_collection.insert_one(parsed.copy())
+        inserted = insert_parsed_events(all_events)
 
         return {
-            "message": "Log parsed and saved",
-            "id": str(result.inserted_id),
-            "parsed": parsed,
+            "runId": str(run_id),
+            "raw_logs": len(rows),
+            "parsed_events_generated": len(all_events),
+            "inserted_total_for_run": inserted,
         }
 
     except Exception as e:
-        print("Parse error:", e)
-        raise HTTPException(status_code=500, detail="Error while parsing log")
-
-
-@app.post("/logs/parse/from-db")
-def parse_from_db(limit: int = Query(20, ge=1, le=200)):
-    """
-    BONUS utile pour pipeline automatique:
-    - lit raw_logs
-    - normalise
-    - parse + events
-    - insère dans parsed_logs
-    - anti-duplication par raw_log_id
-    """
-    try:
-        raw_docs = list(raw_logs_collection.find().sort("createdAt", -1).limit(int(limit)))
-
-        inserted = 0
-        items = []
-
-        for doc in raw_docs:
-            norm = normalize_raw_log(doc)
-            raw_text = norm["raw_text"]
-
-            if parsed_logs_collection.find_one({"raw_log_id": norm["raw_log_id"]}):
-                continue
-
-            findings = extract_regex_findings(raw_text)
-            events = extract_semantic_events(raw_text)
-            sev = compute_severity(findings)
-            yaml_data = try_parse_yaml(raw_text)
-
-            parsed = {
-                "raw_log_id": norm["raw_log_id"],
-                "source": norm["source"],
-                "pipelineId": norm["pipelineId"],
-                "runId": norm["runId"],
-                "repo": norm["repo"],
-                "branch": norm["branch"],
-                "jobId": norm["jobId"],
-                "status": norm["status"],
-                "pulled": norm["pulled"],
-
-                "events": events,               # ✅ événements sémantiques
-                "regex_findings": findings,
-                "severity": sev["severity"],
-                "severity_score": sev["score"],
-                "yaml": yaml_data,
-
-                "createdAt": datetime.utcnow(),
-            }
-
-            r = parsed_logs_collection.insert_one(parsed.copy())
-            inserted += 1
-            items.append({"raw_log_id": norm["raw_log_id"], "parsed_id": str(r.inserted_id)})
-
-        return {
-            "message": "Parsed from DB",
-            "requested": int(limit),
-            "inserted": inserted,
-            "items": items,
-        }
-
-    except Exception as e:
-        print("Parse-from-db error:", e)
-        raise HTTPException(status_code=500, detail="Error while parsing from DB")
-
-
-@app.get("/parsed")
-def list_parsed(limit: int = Query(20, ge=1, le=200)):
-    try:
-        docs = list(parsed_logs_collection.find().sort("createdAt", -1).limit(int(limit)))
-        for d in docs:
-            d["_id"] = str(d["_id"])
-        return docs
-    except Exception as e:
-        print("List parsed error:", e)
-        raise HTTPException(status_code=500, detail="Error while fetching parsed logs")
-
-
-@app.get("/parsed/{parsed_id}")
-def get_parsed_by_id(parsed_id: str):
-    try:
-        doc = parsed_logs_collection.find_one({"_id": ObjectId(parsed_id)})
-        if not doc:
-            raise HTTPException(status_code=404, detail="Parsed log not found")
-        doc["_id"] = str(doc["_id"])
-        return doc
-    except HTTPException:
-        raise
-    except Exception as e:
-        print("Get parsed error:", e)
-        raise HTTPException(status_code=400, detail="Invalid id format")
+        raise HTTPException(status_code=500, detail=str(e))

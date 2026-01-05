@@ -1,0 +1,29 @@
+{
+  "pipeline_id": "ci-demo",
+  "points": 14,
+  "features_order": [
+    "duration_sec",
+    "error_count",
+    "secrets_count",
+    "urls_count",
+    "bypass_count",
+    "steps_count",
+    "severity_score"
+  ],
+  "tf_enabled": false,
+  "iso_contamination": 0.05,
+  "out_dir": "./plots",
+  "generated_at": "2026-01-04T11:11:34.501618Z",
+  "files": [
+    "1_matrix_heatmap.png",
+    "2_hist_bypass_count.png",
+    "2_hist_duration_sec.png",
+    "2_hist_error_count.png",
+    "2_hist_secrets_count.png",
+    "2_hist_severity_score.png",
+    "2_hist_steps_count.png",
+    "2_hist_urls_count.png",
+    "3_pca_if_scatter.png",
+    "4_if_score_timeline.png"
+  ]
+}

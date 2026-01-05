@@ -1,31 +1,65 @@
-# rules_fixes.yaml
-# Liste de règles → suggestion de correctif (simulation "auto-fix")
-
 rules:
-  - rule_id: "R001"
-    title: "Exposed secret in logs"
+  - rule_id: "SECRET-LEAK"
+    title: "Secrets exposed in CI logs"
     severity: "critical"
-    description: "Token / secret détecté dans les logs."
     suggestion:
-      summary: "Mask secrets + use Vault"
-      yaml_patch: |
-        # Example GitHub Actions patch
-        # - Add secret masking and use GitHub Secrets / Vault
+      safe: true
+      template: |
+        # FIX: Mask secrets and avoid printing them.
         - name: Mask secrets
           run: |
             echo "::add-mask::${{ secrets.MY_TOKEN }}"
-        - name: Use Vault (example)
+        - name: Use GitHub Secrets / Vault
           run: |
-            echo "Fetch secrets from Vault here"
+            echo "Use secrets manager (Vault/GitHub Secrets) instead of hardcoding."
 
-  - rule_id: "R002"
-    title: "Pipeline contains error keywords"
-    severity: "medium"
-    description: "Le mot ERROR est détecté dans les logs."
+  - rule_id: "SLSA-BYPASS"
+    title: "Security checks bypass detected"
+    severity: "high"
     suggestion:
-      summary: "Fail fast + improve step error handling"
-      yaml_patch: |
-        - name: Fail fast on errors
+      safe: true
+      template: |
+        # FIX: Prevent bypass of checks
+        - name: Enforce required checks
+          run: |
+            echo "Enable branch protection rules and required status checks."
+            echo "Block '--no-verify' usage in your workflow steps."
+
+  - rule_id: "PIPELINE-FAIL"
+    title: "Pipeline failure indicators"
+    severity: "medium"
+    suggestion:
+      safe: true
+      template: |
+        # FIX: Fail fast and improve logs
+        - name: Fail fast
           run: |
             set -e
             echo "Stop pipeline if an error occurs"
+        - name: Improve error context
+          run: |
+            echo "Add more logs + artifacts upload for debugging."
+
+  - rule_id: "EXTERNAL-URL"
+    title: "External URL found in logs"
+    severity: "low"
+    suggestion:
+      safe: true
+      template: |
+        # FIX: Review external URLs / downloads
+        - name: Validate external downloads
+          run: |
+            echo "Whitelist trusted domains and pin versions for external downloads."
+name: CI
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          echo "token=${{ secrets.MY_TOKEN }}"
+          curl https://example.com/script.sh | bash
+          git commit --no-verify -m "test"
+          exit 1
